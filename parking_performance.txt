@@ -1,0 +1,21 @@
+# Performance Tracking - Démarré le 2025-11-01 13:03:26
+# Format: Batch X-Y: Success=% Collision=% MinDist=Xm Zone4=% AvgSteps=X AvgSpeed=Xm/s Reverse=% Trend=X
+#====================================================================================================
+Batch 0000-0099: Success=  0.0% Collision=  5.0% Timeout= 48.0% OOB= 47.0% MinDist= 12.1m Zone4= 25.0% Steps=5312 Speed=0.6m/s Reverse=44.8% Trend=NEW
+Batch 0100-0199: Success=  0.0% Collision= 15.0% Timeout= 26.0% OOB= 59.0% MinDist= 11.4m Zone4= 25.0% Steps=1480 Speed=0.9m/s Reverse=50.6% Trend=→
+Batch 0200-0299: Success=  0.0% Collision= 25.0% Timeout= 29.0% OOB= 46.0% MinDist= 16.3m Zone4= 13.0% Steps=1591 Speed=0.9m/s Reverse=58.3% Trend=→
+Batch 0300-0399: Success=  0.0% Collision= 31.0% Timeout= 25.0% OOB= 44.0% MinDist= 17.2m Zone4=  3.0% Steps=1607 Speed=0.9m/s Reverse=51.2% Trend=→
+Batch 0400-0499: Success=  0.0% Collision= 27.0% Timeout= 43.0% OOB= 30.0% MinDist= 16.7m Zone4=  9.0% Steps=1812 Speed=0.9m/s Reverse=52.1% Trend=→
+Batch 0500-0599: Success=  0.0% Collision= 18.0% Timeout= 28.0% OOB= 54.0% MinDist= 15.8m Zone4= 15.0% Steps=1592 Speed=1.0m/s Reverse=49.6% Trend=→
+Batch 0600-0699: Success=  0.0% Collision= 41.0% Timeout= 37.0% OOB= 22.0% MinDist= 15.7m Zone4=  8.0% Steps=1864 Speed=0.8m/s Reverse=44.6% Trend=→
+Batch 0700-0799: Success=  0.0% Collision= 36.0% Timeout= 44.0% OOB= 20.0% MinDist= 14.2m Zone4= 11.0% Steps=2035 Speed=0.8m/s Reverse=45.3% Trend=→
+Batch 0800-0899: Success=  0.0% Collision= 42.0% Timeout= 45.0% OOB= 13.0% MinDist= 12.8m Zone4= 22.0% Steps=2042 Speed=0.7m/s Reverse=39.2% Trend=→
+Batch 0900-0999: Success=  0.0% Collision= 54.0% Timeout= 36.0% OOB= 10.0% MinDist= 12.0m Zone4= 16.0% Steps=1914 Speed=0.7m/s Reverse=37.7% Trend=→
+
+====================================================================================================
+=== CHECKPOINT 1000 ÉPISODES ===
+Taux de succès récent (100 derniers): 0.0%
+Distribution zones max: Zone1=1% Zone2=5% Zone3=2% Zone4=2%
+====================================================================================================
+
+Batch 1000-1099: Success=  0.0% Collision= 66.0% Timeout= 29.0% OOB=  5.0% MinDist= 12.9m Zone4= 17.0% Steps=1911 Speed=0.7m/s Reverse=34.6% Trend=→

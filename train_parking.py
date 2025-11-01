@@ -1,68 +1,54 @@
-# --- Fichier train_parking.py ---
-
 import gymnasium as gym
 import numpy as np
 from parking import ParkingEnv
+from performance_tracker import PerformanceTracker
 import pygame 
-
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.vec_env import SubprocVecEnv # Optional, for parallel training
+from stable_baselines3.common.callbacks import BaseCallback
 
-def human_render_loop(agent, env, transpose=False, print_step=False):
-    obs, info = env.reset()
-    clock = pygame.time.Clock()
-    fps = env.metadata["render_fps"]
-
-    term = trunc = quit_loop = False
-    step = 0
-    total_reward = 0
-
-    while not (term or trunc or quit_loop):
-        # Vérifier si l'utilisateur veut quitter
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                quit_loop = True
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_q:
-                quit_loop = True
-
-        action = agent(obs)
-        obs, reward, term, trunc, info = env.step(action)
-        
-        env.render() # L'appel à render() dessine l'écran
-
-        step += 1
-        total_reward += reward
-
-        if print_step:
-            print(f"Step {step}, Action {action}, Info {info}")
-
-        clock.tick(fps)
-    
-    env.close()
-    print(f"Boucle terminée. Récompense totale : {total_reward}")
-
-# --- Wrappers (copiés/adaptés de gym.py) ---
 class NormalizeObservation(gym.ObservationWrapper):
     def __init__(self, env):
         super().__init__(env)
         unwrapped_env = env.unwrapped
 
-        # [car_x, car_y, car_theta, car_v, target_x, target_y]
-        # Set bounds based on world size
         world_w = unwrapped_env.world_width / 2
         world_h = unwrapped_env.world_height / 2
         max_v = unwrapped_env.MAX_VELOCITY
-
-        low = np.array([-world_w, -world_h, -np.pi, -max_v/2, -world_w, -world_h], dtype=np.float32)
-        high = np.array([world_w, world_h, np.pi, max_v, world_w, world_h], dtype=np.float32)
+        
+        low = np.array(
+            [-world_w, -world_h, -np.pi, -max_v/2,      # car (4)
+             -world_w, -world_h,                         # target (2)
+             -1.0, -1.0,                                 # target_dir (2)
+             -np.pi,                                     # angle_error (1)
+             -world_w, -world_h, -world_w, -world_h,    # 4 obstacles positions (8)
+             -world_w, -world_h, -world_w, -world_h,
+             0.0, 0.0, 0.0, 0.0,                        # distances (4)
+             0.0, 0.0, 0.0, 0.0],                       # danger scores (4)
+            dtype=np.float32
+        )
+        
+        # Max distance = diagonale du monde
+        max_dist = np.sqrt((2*world_w)**2 + (2*world_h)**2)
+        
+        high = np.array(
+            [world_w, world_h, np.pi, max_v,
+             world_w, world_h,
+             1.0, 1.0,
+             np.pi,
+             world_w, world_h, world_w, world_h,
+             world_w, world_h, world_w, world_h,
+             max_dist, max_dist, max_dist, max_dist,    # distances max
+             1.0, 1.0, 1.0, 1.0],                        # danger scores max (exp(0) = 1)
+            dtype=np.float32
+        )
 
         self.obs_low = low
         self.obs_high = high
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(6,), dtype=np.float32)
+        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(25,), dtype=np.float32)
 
     def observation(self, obs):
-        # ... (Normalization formula remains the same, just works on the 5-element array now)
+        # Normaliser entre -1 et 1
         range_ = self.obs_high - self.obs_low
         range_[range_ == 0] = 1e-6
         return -1.0 + 2.0 * (obs - self.obs_low) / range_
@@ -70,70 +56,140 @@ class NormalizeObservation(gym.ObservationWrapper):
 class NormalizeAction(gym.ActionWrapper):
     def __init__(self, env):
         super().__init__(env)
-        # Agent outputs actions in [-1, 1] range
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=env.action_space.shape, dtype=np.float32)
 
     def action(self, act):
-        # Denormalize action from [-1, 1] to env's action space bounds
         low = self.env.action_space.low
         high = self.env.action_space.high
-        # Formula: low + (high - low) * (act + 1) / 2
         return low + (high - low) * (act + 1.0) / 2.0
+
+# --- Callback pour intégrer le Performance Tracker ---
+class PerformanceCallback(BaseCallback):
+    def __init__(self, tracker, verbose=0):
+        super(PerformanceCallback, self).__init__(verbose)
+        self.tracker = tracker
+        self.episode_rewards = []
+        self.episode_data = {}
+    
+    def _on_step(self) -> bool:
+        # Pour chaque environnement dans le vec_env
+        for idx in range(self.training_env.num_envs):
+            # Si pas encore initialisé pour cet env
+            if idx not in self.episode_data:
+                self.episode_data[idx] = {
+                    'tracker_initialized': False,
+                    'episode_reward': 0
+                }
+            
+            # Récupérer les infos du step
+            info = self.locals.get('infos', [{}] * self.training_env.num_envs)[idx]
+            reward = self.locals['rewards'][idx]
+            done = self.locals['dones'][idx]
+            
+            self.episode_data[idx]['episode_reward'] += reward
+            
+            # Si premier step de l'épisode
+            if not self.episode_data[idx]['tracker_initialized']:
+                self.tracker.reset_episode()
+                self.episode_data[idx]['tracker_initialized'] = True
+            
+            # Enregistrer le step
+            if 'state' in info:
+                self.tracker.step(
+                    state=info['state'],
+                    reward=reward,
+                    terminated=done,
+                    truncated=False,
+                    info=info
+                )
+            
+            # Si épisode terminé
+            if done:
+                self.tracker.end_episode()
+                self.episode_data[idx]['tracker_initialized'] = False
+                self.episode_data[idx]['episode_reward'] = 0
+        
+        return True
 
 # --- Main Training Logic ---
 if __name__ == "__main__":
     
     # 1. Register the environment
-    #    The string format is "Namespace:EnvName-vVersion"
     gym.register(
         id="Parking-v0",
-        entry_point="__main__:ParkingEnv", # Assumes ParkingEnv is in the same file
-        max_episode_steps=1500 # Limit episode length (important!)
+        entry_point="parking:ParkingEnv",
+        max_episode_steps=3000
     )
-    
     print("Environnement 'Parking-v0' enregistré.")
 
-    # 2. Create and wrap the environment
-    #    make_vec_env creates multiple instances for parallel training (faster)
-    #    n_envs=4 means 4 parallel environments
-    #    Adjust n_envs based on your CPU cores
+    # 2. Initialiser le tracker de performance
+    tracker = PerformanceTracker(log_file="parking_performance.txt", batch_size=100)
+    print("Tracker de performance initialisé.")
+
+    # 3. Create and wrap the environment
     env_id = "Parking-v0"
-    n_envs = 4 
+    n_envs = 8  # Environnements parallèles
     
-    # Define a function to create a single wrapped environment
     def make_env():
         env = gym.make(env_id)
         env = NormalizeObservation(env)
         env = NormalizeAction(env)
         return env
 
-    # Create the vectorized environment
-    # Use SubprocVecEnv for true parallelism if desired, otherwise default DummyVecEnv is fine
-    vec_env = make_vec_env(make_env, n_envs=n_envs) #, vec_env_cls=SubprocVecEnv) 
-    
-    print(f"{n_envs} environnements vectorisés et enveloppés créés.")
+    vec_env = make_vec_env(make_env, n_envs=n_envs)
+    print(f"{n_envs} environnements vectorisés créés.")
 
-    # 3. Instantiate the PPO agent
-    #    "MlpPolicy" is a standard neural network policy
-    #    verbose=1 prints training progress
-    #model = PPO("MlpPolicy", vec_env, verbose=1, tensorboard_log="./ppo_parking_tensorboard/")
-    model = PPO("MlpPolicy", vec_env, verbose=1, learning_rate=1e-4, tensorboard_log="./ppo_parking_tensorboard/")
-    
-    print("Agent PPO créé.")
+    # 4. Instantiate PPO agent avec hyperparamètres optimisés
+    model = PPO(
+        "MlpPolicy", 
+        vec_env, 
+        verbose=1, 
+        learning_rate=5e-4,          # Augmenté (était 3e-4)
+        n_steps=4096,                # Augmenté (était 2048)
+        batch_size=64,
+        n_epochs=10,
+        gamma=0.99,
+        gae_lambda=0.95,
+        clip_range=0.2,
+        ent_coef=0.05,               # Augmenté pour plus d'exploration (était 0.01)
+        vf_coef=0.5,
+        max_grad_norm=0.5,
+        tensorboard_log="./ppo_parking_tensorboard/"
+    )
 
-    # 4. Train the agent
-    #    total_timesteps is crucial. Start small (e.g., 10k) to test, 
-    #    but you'll likely need 1M+ for good results.
-    total_timesteps = 2_000_000 # Start with 100k, increase later
-    print(f"Début de l'entraînement pour {total_timesteps} timesteps...")
-    
-    model.learn(total_timesteps=total_timesteps, progress_bar=True)
-    
-    print("Entraînement terminé.")
+    # 5. Create callback
+    callback = PerformanceCallback(tracker=tracker, verbose=1)
 
-    # 5. Save the trained model
-    model_save_path = "./ppo_parking_model"
+    # 6. Train the agent
+    total_timesteps = 2_000_000  # 2M timesteps
+    print(f"Début de l'entraînement pour {total_timesteps:,} timesteps...")
+    print(f"Les performances seront loggées dans 'parking_performance.txt'")
+    print(f"Un batch = 100 épisodes\n")
+    
+    try:
+        model.learn(
+            total_timesteps=total_timesteps, 
+            callback=callback,
+            progress_bar=True
+        )
+    except KeyboardInterrupt:
+        print("\nEntraînement interrompu par l'utilisateur.")
+    
+    print("\nEntraînement terminé.")
+    
+    # 7. Save the trained model
+    model_save_path = "./ppo_parking_model_improved"
     model.save(model_save_path)
     print(f"Modèle sauvegardé à : {model_save_path}.zip")
+    
+    # 8. Afficher le résumé final
+    summary = tracker.get_summary()
+    print("\n" + "="*80)
+    print("RÉSUMÉ FINAL")
+    print("="*80)
+    print(f"Total d'épisodes: {summary['total_episodes']}")
+    print(f"Taux de succès récent (100 derniers): {summary['recent_success_rate']:.1f}%")
+    print(f"Voir 'parking_performance.txt' pour le détail complet")
+    print("="*80)
 
     vec_env.close()
