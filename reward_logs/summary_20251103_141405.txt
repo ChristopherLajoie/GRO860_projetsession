@@ -1,0 +1,80 @@
+================================================================================
+REWARD FUNCTION ANALYSIS SUMMARY
+================================================================================
+
+EPISODE RESULTS
+--------------------------------------------------------------------------------
+Total Episodes: 20
+✅ Successes: 0 (0.0%)
+❌ Collisions: 4 (20.0%)
+⚠️  Out of Bounds: 0 (0.0%)
+⏱️  Timeouts: 16 (80.0%)
+
+REWARD COMPONENTS ANALYSIS (for tuning)
+--------------------------------------------------------------------------------
+
+Average contribution per episode (across all episodes):
+  alignment                :     0.00 ± 0.00
+  collision                :   -10.00 ± 20.00
+  in_spot                  :   272.60 ± 648.98
+  out_of_bounds            :     0.00 ± 0.00
+  progress                 :    43.32 ± 49.23
+  safety                   :    -1.76 ± 4.90
+  step_cost                :   -32.45 ± 15.09
+  success                  :     0.00 ± 0.00
+  total                    :   271.70 ± 683.53
+  vel_near_goal            :     0.00 ± 0.00
+
+
+PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+
+Overall averages:
+  Minimum Distance to Target (m)          : 4.82
+  Final Distance (m)                      : 4.84
+  Average Velocity (m/s)                  : 0.53
+  Max Velocity (m/s)                      : 1.64
+  Direction Changes                       : 41.80
+  Steps in Reverse                        : 76.30
+  Close Calls (<2m)                       : 22.50
+  Closest Obstacle (m)                    : 3.19
+
+
+FAILURE EPISODES ANALYSIS:
+--------------------------------------------------------------------------------
+Failure breakdown:
+
+COLLISION:
+  Minimum Distance to Target (m)          : 4.39
+  Final Distance (m)                      : 4.39
+  Average Velocity (m/s)                  : 2.37
+  Max Velocity (m/s)                      : 3.46
+  Direction Changes                       : 27.25
+  Steps in Reverse                        : 28.25
+  Close Calls (<2m)                       : 12.75
+  Closest Obstacle (m)                    : 1.55
+
+TIMEOUT:
+  Minimum Distance to Target (m)          : 4.93
+  Final Distance (m)                      : 4.95
+  Average Velocity (m/s)                  : 0.07
+  Max Velocity (m/s)                      : 1.19
+  Direction Changes                       : 45.44
+  Steps in Reverse                        : 88.31
+  Close Calls (<2m)                       : 24.94
+  Closest Obstacle (m)                    : 3.60
+
+
+RECOMMENDATIONS FOR REWARD TUNING:
+--------------------------------------------------------------------------------
+⚠️  LOW SUCCESS RATE:
+   - Consider increasing progress reward scale
+   - Check if success conditions are too strict
+   - May need more training time
+
+⚠️  MANY CLOSE CALLS:
+   - Agent is taking risky paths
+   - Consider increasing safety_threshold
+
+
+================================================================================

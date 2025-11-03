@@ -1,26 +1,15 @@
 import gymnasium as gym
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, LineString, Point
 import pygame
 
-class ParkingEnv(gym.Env):
-    """
-    PARKING RÉALISTE AMÉLIORÉ avec:
-    - 5 colonnes × 10 voitures (50 voitures)
-    - 1 place libre aléatoire
-    - Allées 12m + zones circulation
-    - Spawn dans allées/circulation (centré et parallèle)
-    - Observations 25 éléments (car + target + distances + danger scores + directions obstacles)
-    - Système de zones de progression
-    - Reward améliorée avec danger awareness
-    """
-    
+class ParkingEnv(gym.Env):    
     metadata = {"render_modes": ["rgb_array", "human"], "render_fps": 30}
 
     def __init__(self, render_mode=None):
         super().__init__()
 
-        # Constantes véhicule
+        # ----- simulation parameters -----
         self.dt = 1 / self.metadata["render_fps"]
         self.CAR_LENGTH = 4.5
         self.CAR_WIDTH = 2.0
@@ -29,52 +18,79 @@ class ParkingEnv(gym.Env):
         self.MAX_VELOCITY = 5.0
         self.VELOCITY_DECAY = 0.99
         
-        # Constantes parking
+        # parking layout
         self.SPOT_WIDTH = self.CAR_WIDTH * 1.5
         self.SPOT_DEPTH = self.CAR_LENGTH * 1.2
         self.AISLE_WIDTH = 12.0
         self.CIRCULATION_ZONE = 15.0
-        self.NUM_COLUMNS = 5
+        self.NUM_COLUMNS = 1  # Changed to 1 column
         self.CARS_PER_COLUMN = 10
         
-        # État
-        self.state = np.zeros(4, dtype=np.float32)
+        # lidar
+        self.NUM_LIDAR_RAYS = 8
+        self.LIDAR_MAX_RANGE = 20.0 # meters
+        # Angles des rayons (0=avant, pi/2=gauche, pi=arrière, 3pi/2=droite)
+        self.LIDAR_ANGLES = np.linspace(0, 2 * np.pi, self.NUM_LIDAR_RAYS, endpoint=False)
+        
+        # ----- agent state -----
+        self.state = np.zeros(4, dtype=np.float32)  # x, y, theta, v
         self.prev_dist_to_target = None
         self._prev_car_pos = None
-        self.current_zone = None
-        self.visited_zones = set()
 
-        # Actions
+        # ----- actions -----
         self.action_space = gym.spaces.Box(
             low=np.array([-self.MAX_ACCEL, -self.MAX_STEER_ANGLE], dtype=np.float32),
             high=np.array([self.MAX_ACCEL, self.MAX_STEER_ANGLE], dtype=np.float32),
             shape=(2,)
         )
         
-        # Observations: 25 éléments
-        # car(4) + target(2) + target_dir(2) + angle_error(1) + 
-        # obstacles_pos(8) + obstacles_dist(4) + danger_scores(4)
-        self.observation_space = gym.spaces.Box(
-            low=-np.inf, high=np.inf, shape=(25,), dtype=np.float32
+        # Compute parking/world size
+        parking_width = (self.NUM_COLUMNS * self.SPOT_DEPTH) + ((self.NUM_COLUMNS - 1) * self.AISLE_WIDTH)
+        parking_height = (self.CARS_PER_COLUMN * self.SPOT_WIDTH)
+        self.world_width = parking_width + 2 * self.CIRCULATION_ZONE + self.AISLE_WIDTH
+        self.world_height = parking_height + 2 * self.CIRCULATION_ZONE
+
+        # world boundaries (for lidar intersections)
+        w, h = self.world_width / 2, self.world_height / 2
+        self.world_boundaries = [
+            LineString([(-w, -h), (w, -h)]), # bottom
+            LineString([(w, -h), (w, h)]),   # right
+            LineString([(w, h), (-w, h)]),   # top
+            LineString([(-w, h), (-w, -h)])  # left
+        ]
+
+        # ----- observation space -----
+        # We will expose relative target coordinates (dx, dy) instead of global target_x/target_y
+        # obs: car_x, car_y, car_theta, car_v, dx, dy, target_dir_x, target_dir_y, angle_error, lidar(8)
+        low = np.array(
+            [-np.inf, -np.inf, -np.pi, -self.MAX_VELOCITY] +  # car_state
+            [-np.inf] * 2 +  # dx, dy
+            [-1.0] * 2 +     # target_dir
+            [-np.pi] +       # angle_error
+            [0.0] * self.NUM_LIDAR_RAYS,
+            dtype=np.float32
+        )
+        high = np.array(
+            [np.inf, np.inf, np.pi, self.MAX_VELOCITY] +  # car_state
+            [np.inf] * 2 +  # dx, dy
+            [1.0] * 2 +     # target_dir
+            [np.pi] +       # angle_error
+            [self.LIDAR_MAX_RANGE] * self.NUM_LIDAR_RAYS,
+            dtype=np.float32
         )
 
-        # Variables
+        self.observation_space = gym.spaces.Box(low=low, high=high, shape=(4 + 2 + 2 + 1 + self.NUM_LIDAR_RAYS,), dtype=np.float32)
+
+        # ----- variables -----
         self.target_polygon = None
         self.target_pose = np.zeros(3)
         self.obstacles = []
         self.obstacle_poses = []
         self.empty_spot_index = None
         
-        # Calcul dimensions pour centrer le parking
-        parking_width = (self.NUM_COLUMNS * self.SPOT_DEPTH) + ((self.NUM_COLUMNS - 1) * self.AISLE_WIDTH)
-        parking_height = (self.CARS_PER_COLUMN * self.SPOT_WIDTH)
-        
-        # Ajouter marge pour circulation et centrer
-        self.world_width = parking_width + 2 * self.CIRCULATION_ZONE + self.AISLE_WIDTH
-        self.world_height = parking_height + 2 * self.CIRCULATION_ZONE
-        
+        # rendering
         self.render_mode = render_mode
-        self.pixels_per_meter = 8  # Augmenté pour meilleure visualisation
+        self.pixels_per_meter = 8
         self.screen_width = int(self.world_width * self.pixels_per_meter)
         self.screen_height = int(self.world_height * self.pixels_per_meter)
         self.screen = None
@@ -83,26 +99,34 @@ class ParkingEnv(gym.Env):
         
         if self.render_mode == "human":
             pygame.init()
-            pygame.display.set_caption("Parking RL - Vue de dessus")
+            pygame.display.set_caption("Parking")
             self.screen = pygame.display.set_mode((self.screen_width, self.screen_height))
             self.clock = pygame.time.Clock()
             self.font = pygame.font.Font(None, 24)
-        
-        print(f"✅ Parking: {self.NUM_COLUMNS}cols × {self.CARS_PER_COLUMN}cars = 50 voitures")
-        print(f"✅ Monde: {self.world_width:.1f}m × {self.world_height:.1f}m")
-        print(f"✅ Observations: {self.observation_space.shape[0]} éléments")
-        print(f"✅ Système de zones activé (4 zones)")
+
+        # ----- reward and behavior tuning params (exposed for easy tuning) -----
+        self.progress_scale = 10.0           # Was 3.0 → stronger approach motivation
+        self.angle_activation_dist = 2.0      # Was 5.0 → only align when very close
+        self.alignment_weight = -0.2          # Was -1.0 → 80% reduction, less harsh
+        self.safety_threshold = 2.0           # Was 3.0 → allow closer approach to obstacles
+        self.safety_scale = 0.5               # Was 2.0 → 75% reduction, less harsh
+        self.safety_cap = -5.0                # Was -20.0 → less harsh maximum penalty
+        self.step_penalty = -0.02
+        self.velocity_near_goal_penalty = -0.5
+        self.goal_slow_radius = 2.0
+        self.collision_penalty = -50.0
+        self.out_of_bounds_penalty = -30.0
+        self.success_reward = 500.0           # Was 200.0 → make success VERY attractive
+        self.per_step_clip = 10.0             # Applies only to per-step rewards (NOT terminals)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
 
-        # Créer parking centré
         self.obstacles = []
         self.obstacle_poses = []
         total_spots = self.NUM_COLUMNS * self.CARS_PER_COLUMN
-        self.empty_spot_index = self.np_random.integers(0, total_spots)
+        self.empty_spot_index = 7  # 8th spot from top (0-indexed)
         
-        # Calculer position de départ du parking (centré)
         parking_width = (self.NUM_COLUMNS * self.SPOT_DEPTH) + ((self.NUM_COLUMNS - 1) * self.AISLE_WIDTH)
         start_x = -parking_width / 2
         
@@ -125,52 +149,33 @@ class ParkingEnv(gym.Env):
                     ]
                     self.target_polygon = Polygon(coords)
                 else:
-                    # VOITURE GARÉE
+                    # PARKED CAR
                     car_state = np.array([col_x, spot_y, 0.0, 0.0])
                     self.obstacles.append(Polygon(self._get_car_polygon(car_state)))
                     self.obstacle_poses.append([col_x, spot_y])
                 
                 spot_idx += 1
         
-        # Spawn intelligent dans allées ou circulation (centré et parallèle)
+        # Spawn perpendicular to parked cars with vertical position variation
         for _ in range(100):
-            zone_type = self.np_random.integers(0, 3)
+            # Spawn in the aisle, perpendicular to the single column
+            # The column is centered at x = 0
+            # Agent spawns at aisle distance from the column
             
-            if zone_type == 0:  # ALLÉE (entre les colonnes)
-                aisle_idx = self.np_random.integers(0, self.NUM_COLUMNS + 1)
-                
-                if aisle_idx == 0:
-                    # Première allée (à gauche)
-                    aisle_center_x = start_x - self.AISLE_WIDTH / 2
-                elif aisle_idx == self.NUM_COLUMNS:
-                    # Dernière allée (à droite)
-                    aisle_center_x = start_x + self.NUM_COLUMNS * self.SPOT_DEPTH + (self.NUM_COLUMNS - 1) * self.AISLE_WIDTH + self.AISLE_WIDTH / 2
-                else:
-                    # Allées centrales
-                    aisle_center_x = start_x + aisle_idx * self.SPOT_DEPTH + (aisle_idx - 0.5) * self.AISLE_WIDTH
-                
-                x = aisle_center_x  # Toujours centré dans l'allée
-                y = self.np_random.uniform(
-                    -self.world_height/2 + self.CIRCULATION_ZONE + self.CAR_LENGTH,
-                    self.world_height/2 - self.CIRCULATION_ZONE - self.CAR_LENGTH
-                )
-                theta = self.np_random.choice([np.pi/2, -np.pi/2])  # Toujours parallèle
-                
-            elif zone_type == 1:  # CIRCULATION HAUT
-                x = self.np_random.uniform(
-                    -self.world_width/2 + self.CAR_LENGTH,
-                    self.world_width/2 - self.CAR_LENGTH
-                )
-                y = self.world_height/2 - self.CIRCULATION_ZONE / 2
-                theta = self.np_random.choice([0.0, np.pi])  # Horizontal
-                
-            else:  # CIRCULATION BAS
-                x = self.np_random.uniform(
-                    -self.world_width/2 + self.CAR_LENGTH,
-                    self.world_width/2 - self.CAR_LENGTH
-                )
-                y = -self.world_height/2 + self.CIRCULATION_ZONE / 2
-                theta = self.np_random.choice([0.0, np.pi])  # Horizontal
+            # Vary vertical position along the parking area
+            y = self.np_random.uniform(
+                -self.world_height/2 + self.CIRCULATION_ZONE + self.CAR_LENGTH,
+                self.world_height/2 - self.CIRCULATION_ZONE - self.CAR_LENGTH
+            )
+            
+            # Spawn in aisle (to the right of the column)
+            # Use the same aisle distance as before
+            x = self.AISLE_WIDTH / 2
+            
+            # Perpendicular to parked cars (±π/2) with small angle variation
+            base_angle = self.np_random.choice([np.pi/2, -np.pi/2])
+            angle_variation = self.np_random.uniform(-0.15, 0.15)  # ±8.6 degrees
+            theta = base_angle + angle_variation
             
             self.state = np.array([x, y, theta, 0.0], dtype=np.float32)
             
@@ -179,19 +184,21 @@ class ParkingEnv(gym.Env):
         
         start_state_for_info = self.state.copy()
         
-        # Init reward vars
         target_center = self.target_pose[:2]
         car_center = self.state[:2]
         self.prev_dist_to_target = np.linalg.norm(target_center - car_center)
         self._prev_car_pos = car_center.copy()
-        
-        # Init zone system
-        self.current_zone = self._get_zone(self.prev_dist_to_target)
-        self.visited_zones = {self.current_zone}
+        self.initial_distance = np.linalg.norm(target_center - car_center)
+        self.immob_time = 0.0
 
         obs_dict = self._get_obs_dict()
         observation = self._obs_dict_to_array(obs_dict)
-        info = {"state": self.state, "start_state": start_state_for_info}
+        info = {
+            "state": self.state,
+            "start_state": start_state_for_info,
+            "target_x": self.target_pose[0],
+            "target_y": self.target_pose[1]
+        }
         return observation, info
     
     def step(self, action):
@@ -207,20 +214,28 @@ class ParkingEnv(gym.Env):
 
         terminated = collision or success or out_of_bounds
         truncated = False
-        info = {"state": self.state, "reward_total": total_reward, **reward_info}
+        info = {
+            "state": self.state,
+            "reward_total": total_reward,
+            "target_x": self.target_pose[0],
+            "target_y": self.target_pose[1],
+            "angle_error": obs_dict["angle_error"],
+            "lidar_distances": obs_dict["lidar_distances"],
+            **reward_info
+        }
 
         return observation, total_reward, terminated, truncated, info
     
     def render(self):
         canvas = pygame.Surface((self.screen_width, self.screen_height))
-        canvas.fill((240, 240, 240))  # Gris clair pour le fond
+        canvas.fill((240, 240, 240))
 
         def world_to_pixels(coords):
             px = (coords[0] + self.world_width / 2) * self.pixels_per_meter
             py = (-coords[1] + self.world_height / 2) * self.pixels_per_meter
             return (px, py)
 
-        # Dessiner les lignes de parking
+        # Draw parking lines
         parking_width = (self.NUM_COLUMNS * self.SPOT_DEPTH) + ((self.NUM_COLUMNS - 1) * self.AISLE_WIDTH)
         start_x = -parking_width / 2
         
@@ -234,20 +249,35 @@ class ParkingEnv(gym.Env):
             end_point = world_to_pixels((line_x, self.world_height/2 - self.CIRCULATION_ZONE))
             pygame.draw.line(canvas, (200, 200, 200), start_point, end_point, 2)
 
-        # Target (vert clair avec contour)
+        # Target
         target_poly_pixels = [world_to_pixels(p) for p in self.target_polygon.exterior.coords]
         pygame.draw.polygon(canvas, (144, 238, 144), target_poly_pixels)
         pygame.draw.polygon(canvas, (0, 128, 0), target_poly_pixels, 3)
 
-        # Obstacles (voitures garées - vue de dessus)
+        # Obstacles
         for obs_poly in self.obstacles:
             self._draw_car_top_view(canvas, obs_poly, (100, 100, 100), world_to_pixels)
 
-        # Agent (voiture bleue)
+        # Agent
         car_poly = Polygon(self._get_car_polygon(self.state))
         self._draw_car_top_view(canvas, car_poly, (70, 130, 180), world_to_pixels, is_agent=True)
 
-        # Afficher infos
+        # Draw Lidar rays
+        if self.render_mode == "human":
+            obs_dict = self._get_obs_dict()
+            lidar_distances = obs_dict["lidar_distances"]
+            car_x, car_y, car_theta = self.state[:3]
+            start_pixel = world_to_pixels((car_x, car_y))
+            
+            for i, dist in enumerate(lidar_distances):
+                ray_global_angle = car_theta + self.LIDAR_ANGLES[i]
+                end_x = car_x + dist * np.cos(ray_global_angle)
+                end_y = car_y + dist * np.sin(ray_global_angle)
+                end_pixel = world_to_pixels((end_x, end_y))
+                color = (255, 0, 0) if dist < self.LIDAR_MAX_RANGE - 0.1 else (0, 150, 0)
+                pygame.draw.line(canvas, color, start_pixel, end_pixel, 1)
+
+        # Info overlay
         if self.font:
             target_dist = np.linalg.norm(self.state[:2] - self.target_pose[:2])
             zone = self._get_zone(target_dist)
@@ -268,34 +298,35 @@ class ParkingEnv(gym.Env):
         else:
             return np.transpose(pygame.surfarray.pixels3d(canvas), axes=(1, 0, 2))
 
+    # Drawing helper
     def _draw_car_top_view(self, canvas, car_poly, color, world_to_pixels, is_agent=False):
-        """Dessine une voiture vue de dessus avec détails réalistes"""
-        # Corps principal
         poly_pixels = [world_to_pixels(p) for p in car_poly.exterior.coords]
         pygame.draw.polygon(canvas, color, poly_pixels)
-        pygame.draw.polygon(canvas, (50, 50, 50), poly_pixels, 2)  # Contour
+        pygame.draw.polygon(canvas, (50, 50, 50), poly_pixels, 2)
         
-        # Calculer l'orientation de la voiture
         coords = list(car_poly.exterior.coords)
-        front_center = ((coords[2][0] + coords[3][0])/2, (coords[2][1] + coords[3][1])/2)
-        rear_center = ((coords[0][0] + coords[1][0])/2, (coords[0][1] + coords[1][1])/2)
+        if len(coords) < 4:
+            return
         
-        # Pare-brise avant (plus clair)
-        windshield_color = tuple(min(255, c + 40) for c in color)
-        front_pixels = world_to_pixels(front_center)
-        pygame.draw.circle(canvas, windshield_color, front_pixels, 8)
+        rear_right_px = world_to_pixels(coords[0])
+        rear_left_px = world_to_pixels(coords[1])
+        front_left_px = world_to_pixels(coords[2])
+        front_right_px = world_to_pixels(coords[3])
         
-        # Feux arrière (rouge)
         if is_agent:
-            rear_pixels = world_to_pixels(rear_center)
-            pygame.draw.circle(canvas, (200, 0, 0), rear_pixels, 5)
-        
-        # Rétroviseurs (petits rectangles sur les côtés)
-        if is_agent:
-            left_mirror = ((coords[1][0] + coords[2][0])/2, (coords[1][1] + coords[2][1])/2)
-            right_mirror = ((coords[0][0] + coords[3][0])/2, (coords[0][1] + coords[3][1])/2)
-            pygame.draw.circle(canvas, (50, 50, 50), world_to_pixels(left_mirror), 3)
-            pygame.draw.circle(canvas, (50, 50, 50), world_to_pixels(right_mirror), 3)
+            pygame.draw.circle(canvas, (255, 220, 0), front_left_px, 4)
+            pygame.draw.circle(canvas, (255, 220, 0), front_right_px, 4)
+            pygame.draw.line(canvas, (200, 0, 0), rear_left_px, rear_right_px, 5)
+
+            mirror_left_x = coords[1][0] * 0.25 + coords[2][0] * 0.75
+            mirror_left_y = coords[1][1] * 0.25 + coords[2][1] * 0.75
+            mid_left_pixel = world_to_pixels((mirror_left_x, mirror_left_y))
+            pygame.draw.circle(canvas, (50, 50, 50), mid_left_pixel, 3)
+
+            mirror_right_x = coords[0][0] * 0.25 + coords[3][0] * 0.75
+            mirror_right_y = coords[0][1] * 0.25 + coords[3][1] * 0.75
+            mid_right_pixel = world_to_pixels((mirror_right_x, mirror_right_y))
+            pygame.draw.circle(canvas, (50, 50, 50), mid_right_pixel, 3)
 
     def _dynamic_step(self, action):
         x, y, theta, v = self.state
@@ -308,12 +339,31 @@ class ParkingEnv(gym.Env):
         y_next = y + v_next * np.sin(theta_next) * self.dt
         self.state = np.array([x_next, y_next, theta_next, v_next], dtype=np.float32)
     
+    # Ray hit helper (kept for compatibility)
+    def _ray_hits_polygon(self, ray_start_point, ray_end_point, polygon):
+        ray_line = LineString([ray_start_point, ray_end_point])
+        
+        if not ray_line.intersects(polygon):
+            return None
+        
+        intersection = ray_line.intersection(polygon)
+        min_dist = float('inf')
+        
+        if intersection.geom_type == 'Point':
+            min_dist = ray_start_point.distance(intersection)
+        elif intersection.geom_type in ('MultiPoint', 'LineString'):
+            for pt_coord in intersection.coords:
+                dist = ray_start_point.distance(Point(pt_coord))
+                min_dist = min(min_dist, dist)
+        
+        return min_dist if min_dist != float('inf') else None
+
     def _get_obs_dict(self):
         target_center_x, target_center_y, target_angle = self.target_pose
         car_x, car_y, car_theta, car_v = self.state
         car_theta = (car_theta + np.pi) % (2 * np.pi) - np.pi
         
-        # Direction vers target
+        # Relative vector to target (dx, dy)
         dx, dy = target_center_x - car_x, target_center_y - car_y
         dist_to_target = np.sqrt(dx**2 + dy**2)
         
@@ -323,58 +373,60 @@ class ParkingEnv(gym.Env):
         else:
             target_dir_x = target_dir_y = 0.0
         
-        # Angle error
         angle_to_target = np.arctan2(dy, dx)
         angle_error = angle_to_target - car_theta
         angle_error = np.arctan2(np.sin(angle_error), np.cos(angle_error))
         
-        # 4 obstacles les plus proches avec distances et danger scores
-        car_pos = np.array([car_x, car_y])
-        dists = [np.linalg.norm(car_pos - np.array(obs_pos)) for obs_pos in self.obstacle_poses]
-        closest_indices = np.argsort(dists)[:4]
+        # Lidar
+        lidar_distances = np.full(self.NUM_LIDAR_RAYS, self.LIDAR_MAX_RANGE, dtype=np.float32)
+        car_pos_point = Point(car_x, car_y)
+        all_obstacles = self.obstacles + self.world_boundaries
         
-        closest_obs = []
-        closest_dists = []
-        danger_scores = []
-        
-        for idx in closest_indices:
-            obs_pos = self.obstacle_poses[idx]
-            closest_obs.extend(obs_pos)
+        for i, angle_offset in enumerate(self.LIDAR_ANGLES):
+            ray_global_angle = car_theta + angle_offset
+            ray_end_x = car_x + self.LIDAR_MAX_RANGE * np.cos(ray_global_angle)
+            ray_end_y = car_y + self.LIDAR_MAX_RANGE * np.sin(ray_global_angle)
+            ray_end_point = Point(ray_end_x, ray_end_y)
+            ray_line = LineString([car_pos_point, ray_end_point])
             
-            # Distance
-            dist = dists[idx]
-            closest_dists.append(dist)
-            
-            # Danger score exponentiel
-            danger = np.exp(-dist / 2.0)  # Plus la distance est petite, plus le danger est grand
-            danger_scores.append(danger)
+            min_hit_dist = self.LIDAR_MAX_RANGE
+            for obs in all_obstacles:
+                if ray_line.intersects(obs):
+                    intersection = ray_line.intersection(obs)
+                    if intersection.geom_type == 'Point':
+                        dist = car_pos_point.distance(intersection)
+                        min_hit_dist = min(min_hit_dist, dist)
+                    elif intersection.geom_type in ('MultiPoint', 'LineString'):
+                        closest_pt = min(
+                            (Point(c) for c in intersection.coords),
+                            key=lambda p: car_pos_point.distance(p),
+                            default=None
+                        )
+                        if closest_pt:
+                            min_hit_dist = min(min_hit_dist, car_pos_point.distance(closest_pt))
+            lidar_distances[i] = min_hit_dist
 
         return {
             "car_x": car_x, "car_y": car_y, "car_theta": car_theta, "car_v": car_v,
-            "target_x": target_center_x, "target_y": target_center_y,
+            # expose relative target coordinates (dx, dy)
+            "dx": dx, "dy": dy,
             "target_dir_x": target_dir_x, "target_dir_y": target_dir_y,
             "angle_error": angle_error,
-            "closest_obs": closest_obs,
-            "closest_dists": closest_dists,
-            "danger_scores": danger_scores
+            "lidar_distances": lidar_distances
         }
 
     def _obs_dict_to_array(self, obs_dict):
         return np.array([
             # Voiture (4)
             obs_dict["car_x"], obs_dict["car_y"], obs_dict["car_theta"], obs_dict["car_v"],
-            # Target (2)
-            obs_dict["target_x"], obs_dict["target_y"],
-            # Direction vers target (2)
+            # Relative target (dx, dy)
+            obs_dict["dx"], obs_dict["dy"],
+            # Direction towards target (2)
             obs_dict["target_dir_x"], obs_dict["target_dir_y"],
-            # Erreur d'angle (1)
+            # Angle error (1)
             obs_dict["angle_error"],
-            # Positions des 4 obstacles (8)
-            *obs_dict["closest_obs"],
-            # Distances aux 4 obstacles (4)
-            *obs_dict["closest_dists"],
-            # Danger scores (4)
-            *obs_dict["danger_scores"]
+            # Lidar distances (8)
+            *obs_dict["lidar_distances"]
         ], dtype=np.float32)
     
     def _get_car_polygon(self, state):
@@ -406,20 +458,16 @@ class ParkingEnv(gym.Env):
         car_poly = Polygon(self._get_car_polygon(self.state))
         intersection = car_poly.intersection(self.target_polygon).area
         car_area = car_poly.area
-        
-        is_parked = (intersection / car_area) > 0.95
+        is_parked = (intersection / car_area) > 0.92  # Relaxed from 0.95 to 0.92
         is_stopped = np.abs(self.state[3]) < 0.1
-        
         target_angle = self.target_pose[2]
         car_angle = self.state[2]
         angle_diff = np.abs(target_angle - car_angle)
         angle_diff = min(angle_diff, 2*np.pi - angle_diff)
         is_aligned = angle_diff < 0.2
-        
         return is_parked and is_stopped and is_aligned
-    
+
     def _get_zone(self, distance):
-        """Retourne la zone actuelle basée sur la distance au target"""
         if distance > 20:
             return 1
         elif distance > 10:
@@ -428,118 +476,113 @@ class ParkingEnv(gym.Env):
             return 3
         else:
             return 4
-    
+
     def _calculate_reward(self, action, collision, out_of_bounds, success, obs_dict):
-        reward_info = {}
+        reward_info = {
+            "reward_progress": 0.0,
+            "reward_alignment": 0.0,
+            "reward_safety": 0.0,
+            "reward_step_cost": 0.0,
+            "reward_vel_near_goal": 0.0,
+            "reward_collision": 0.0,
+            "reward_out_of_bounds": 0.0,
+            "reward_success": 0.0,
+            "reward_in_spot": 0.0,  # NEW: Intermediate reward
+            "raw_total": 0.0,
+            "clipped_total": 0.0
+        }
 
-        # Pénalités terminales (réduites)
-        if collision:
-            reward_info["reward_collision"] = -150.0
-            return sum(reward_info.values()), reward_info
-        
-        if out_of_bounds:
-            reward_info["reward_out_of_bounds"] = -150.0
-            return sum(reward_info.values()), reward_info
-            
-        if success:
-            reward_info["reward_success"] = 100.0
-            return sum(reward_info.values()), reward_info
-
-        # === RÉCOMPENSES CONTINUES ===
-        
-        # 1. Progress reward (système existant amélioré)
+        # current quantities
         target_center = self.target_pose[:2]
         car_center = self.state[:2]
-        current_dist = np.linalg.norm(target_center - car_center)
-        
-        reward_progress = 0.0
+        current_dist = float(np.linalg.norm(target_center - car_center))
+
+        lidar_distances = obs_dict["lidar_distances"].astype(np.float32)
+        min_lidar_dist = float(np.min(lidar_distances))
+
+        angle_error = float(obs_dict.get("angle_error", 0.0))
+        speed = float(abs(self.state[3]))
+
+        # progress reward (distance reduction)
         if self.prev_dist_to_target is not None:
-            delta_dist = self.prev_dist_to_target - current_dist
-            # Échelle adaptative
-            if current_dist < 5.0:
-                weight = 8.0
-            elif current_dist < 10.0:
-                weight = 4.0
-            elif current_dist < 20.0:
-                weight = 2.0
-            else:
-                weight = 1.0
-            reward_progress = delta_dist * weight
+            delta_dist = float(self.prev_dist_to_target - current_dist)
+            reward_info["reward_progress"] = delta_dist * self.progress_scale
+
+        # alignment reward only when inside activation distance
+        if current_dist <= self.angle_activation_dist:
+            reward_info["reward_alignment"] = self.alignment_weight * abs(angle_error)
+
+        # safety penalty from lidar (quadratic), capped
+        if min_lidar_dist < self.safety_threshold:
+            raw_safety = -((self.safety_threshold - min_lidar_dist) ** 2) * self.safety_scale
+            reward_info["reward_safety"] = max(raw_safety, self.safety_cap)
+
+        # small per-step/time penalty
+        reward_info["reward_step_cost"] = self.step_penalty
+
+        # NEW: Intermediate reward for being in the parking spot (even if not perfect)
+        # This helps the agent learn to enter the spot
+        car_poly = Polygon(self._get_car_polygon(self.state))
+        intersection = car_poly.intersection(self.target_polygon).area
+        car_area = car_poly.area
+        overlap_ratio = intersection / car_area if car_area > 0 else 0
         
+        # Give bonus for being partially in the spot
+        if overlap_ratio > 0.3:  # At least 30% in the spot
+            reward_info["reward_in_spot"] = 1.0  # Good bonus for attempting to park
+        else:
+            reward_info["reward_in_spot"] = 0.0
+
+        # penalize high speed near goal
+        if current_dist < self.goal_slow_radius:
+            reward_info["reward_vel_near_goal"] = self.velocity_near_goal_penalty * speed
+
+        # terminal terms
+        if collision:
+            reward_info["reward_collision"] = self.collision_penalty
+
+        if out_of_bounds:
+            reward_info["reward_out_of_bounds"] = self.out_of_bounds_penalty
+
+        if success:
+            reward_info["reward_success"] = self.success_reward
+
+        # update previous dist
         self.prev_dist_to_target = current_dist
-        reward_info["reward_progress"] = reward_progress
 
-        # 2. Zone progression bonus
-        new_zone = self._get_zone(current_dist)
-        reward_zone = 0.0
-        if new_zone > self.current_zone and new_zone not in self.visited_zones:
-            # Progression vers une meilleure zone
-            reward_zone = 10.0
-            self.visited_zones.add(new_zone)
-        self.current_zone = new_zone
-        reward_info["reward_zone_progression"] = reward_zone
-
-        # 3. Danger-aware reward (pénalité si trop proche des obstacles)
-        danger_scores = obs_dict["danger_scores"]
-        max_danger = max(danger_scores) if danger_scores else 0
-        reward_danger = 0.0
-        if max_danger > 0.3: # Seuil un peu plus large
-            reward_danger = -(max_danger**2) * 15.0
-        reward_info["reward_danger"] = reward_danger
-
-        # 4. Angle alignment (système existant)
-        angle_error = obs_dict["angle_error"]
-        if current_dist < 10.0:
-            angle_weight = 2.0
-        elif current_dist < 20.0:
-            angle_weight = 1.0
-        else:
-            angle_weight = 0.5
+        # sum raw and clip - but ONLY clip per-step rewards, NOT terminals
+        # This is CRITICAL: terminal rewards (success, collision) must not be clipped
+        # or the agent can't distinguish between success and small progress
+        raw_step_reward = (
+            reward_info["reward_progress"]
+            + reward_info["reward_alignment"]
+            + reward_info["reward_safety"]
+            + reward_info["reward_step_cost"]
+            + reward_info["reward_vel_near_goal"]
+            + reward_info["reward_in_spot"]  # Intermediate reward
+        )
         
-        reward_angle_alignment = -abs(angle_error) * angle_weight * 0.5  # Réduit un peu
-        reward_info["reward_angle_alignment"] = reward_angle_alignment
-
-        # 5. Direction bonus (système existant mais ajusté)
-        if hasattr(self, '_prev_car_pos') and self._prev_car_pos is not None:
-            movement = car_center - self._prev_car_pos
-            movement_norm = np.linalg.norm(movement)
-            
-            if movement_norm > 0.01:
-                direction_to_target = target_center - self._prev_car_pos
-                direction_norm = np.linalg.norm(direction_to_target)
-                
-                if direction_norm > 0.01:
-                    dot_product = np.dot(movement, direction_to_target) / (movement_norm * direction_norm)
-                    reward_info["reward_direction"] = dot_product * 0.3
-                else:
-                    reward_info["reward_direction"] = 0.0
-            else:
-                reward_info["reward_direction"] = 0.0
-        else:
-            reward_info["reward_direction"] = 0.0
+        # Clip only the per-step continuous rewards
+        clipped_step_reward = float(np.clip(raw_step_reward, -self.per_step_clip, self.per_step_clip))
         
-        self._prev_car_pos = car_center.copy()
-
-        # 6. Time penalty (constant)
-        reward_info["reward_time_penalty"] = -0.1
-
-        # 7. Immobility penalty
-        reward_immobility = 0.0
-        if abs(self.state[3]) < 0.1 and current_dist > 5.0:
-            reward_immobility = -0.5
-        reward_info["reward_immobility"] = reward_immobility
-
-        # 8. Bonus final (proximité + alignement)
-        reward_final_alignment = 0.0
-        if current_dist < 3.0 and abs(angle_error) < 0.3:
-            reward_final_alignment = 5.0
-        elif current_dist < 2.0 and abs(angle_error) < 0.2:
-            reward_final_alignment = 10.0
-        elif current_dist < 1.0 and abs(angle_error) < 0.1:
-            reward_final_alignment = 20.0
-        reward_info["reward_final_alignment"] = reward_final_alignment
+        # Add terminal rewards WITHOUT clipping - this preserves the learning signal
+        total_reward = clipped_step_reward
+        if collision:
+            total_reward += self.collision_penalty  # NOT clipped! Full -50 penalty
+        if out_of_bounds:
+            total_reward += self.out_of_bounds_penalty  # NOT clipped! Full -30 penalty
+        if success:
+            total_reward += self.success_reward  # NOT clipped! Full +500 reward
         
-        total_reward = sum(reward_info.values())
+        # Update info dict for logging
+        reward_info["raw_total"] = float(
+            raw_step_reward + 
+            reward_info["reward_collision"] + 
+            reward_info["reward_out_of_bounds"] + 
+            reward_info["reward_success"]
+        )
+        reward_info["clipped_total"] = total_reward
+        
         return total_reward, reward_info
     
     def close(self):

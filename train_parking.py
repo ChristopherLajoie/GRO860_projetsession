@@ -1,195 +1,149 @@
+"""
+Script d'entraînement PPO pour l'environnement Parking-v0 (LIDAR).
+MODIFIÉ pour:
+ - utiliser VecNormalize pour normalisation des observations (et optionnellement des rewards)
+ - ajouter un EvalCallback (évaluations régulières)
+ - conserver votre PerformanceCallback et CheckpointCallback
+"""
+
 import gymnasium as gym
 import numpy as np
-from parking import ParkingEnv
-from performance_tracker import PerformanceTracker
-import pygame 
+import os
 from stable_baselines3 import PPO
-from stable_baselines3.common.env_util import make_vec_env
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize, VecMonitor, DummyVecEnv
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
+from parking import ParkingEnv
 
-class NormalizeObservation(gym.ObservationWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        unwrapped_env = env.unwrapped
+# -- register env --
+gym.register(
+    id="Parking-v0",
+    entry_point="parking:ParkingEnv",
+    max_episode_steps=2000
+)
+print("Environnement 'Parking-v0' (Lidar) enregistré.")
 
-        world_w = unwrapped_env.world_width / 2
-        world_h = unwrapped_env.world_height / 2
-        max_v = unwrapped_env.MAX_VELOCITY
-        
-        low = np.array(
-            [-world_w, -world_h, -np.pi, -max_v/2,      # car (4)
-             -world_w, -world_h,                         # target (2)
-             -1.0, -1.0,                                 # target_dir (2)
-             -np.pi,                                     # angle_error (1)
-             -world_w, -world_h, -world_w, -world_h,    # 4 obstacles positions (8)
-             -world_w, -world_h, -world_w, -world_h,
-             0.0, 0.0, 0.0, 0.0,                        # distances (4)
-             0.0, 0.0, 0.0, 0.0],                       # danger scores (4)
-            dtype=np.float32
-        )
-        
-        # Max distance = diagonale du monde
-        max_dist = np.sqrt((2*world_w)**2 + (2*world_h)**2)
-        
-        high = np.array(
-            [world_w, world_h, np.pi, max_v,
-             world_w, world_h,
-             1.0, 1.0,
-             np.pi,
-             world_w, world_h, world_w, world_h,
-             world_w, world_h, world_w, world_h,
-             max_dist, max_dist, max_dist, max_dist,    # distances max
-             1.0, 1.0, 1.0, 1.0],                        # danger scores max (exp(0) = 1)
-            dtype=np.float32
-        )
-
-        self.obs_low = low
-        self.obs_high = high
-        self.observation_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(25,), dtype=np.float32)
-
-    def observation(self, obs):
-        # Normaliser entre -1 et 1
-        range_ = self.obs_high - self.obs_low
-        range_[range_ == 0] = 1e-6
-        return -1.0 + 2.0 * (obs - self.obs_low) / range_
-    
-class NormalizeAction(gym.ActionWrapper):
-    def __init__(self, env):
-        super().__init__(env)
-        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=env.action_space.shape, dtype=np.float32)
-
-    def action(self, act):
-        low = self.env.action_space.low
-        high = self.env.action_space.high
-        return low + (high - low) * (act + 1.0) / 2.0
-
-# --- Callback pour intégrer le Performance Tracker ---
-class PerformanceCallback(BaseCallback):
-    def __init__(self, tracker, verbose=0):
-        super(PerformanceCallback, self).__init__(verbose)
-        self.tracker = tracker
-        self.episode_rewards = []
-        self.episode_data = {}
-    
-    def _on_step(self) -> bool:
-        # Pour chaque environnement dans le vec_env
-        for idx in range(self.training_env.num_envs):
-            # Si pas encore initialisé pour cet env
-            if idx not in self.episode_data:
-                self.episode_data[idx] = {
-                    'tracker_initialized': False,
-                    'episode_reward': 0
-                }
-            
-            # Récupérer les infos du step
-            info = self.locals.get('infos', [{}] * self.training_env.num_envs)[idx]
-            reward = self.locals['rewards'][idx]
-            done = self.locals['dones'][idx]
-            
-            self.episode_data[idx]['episode_reward'] += reward
-            
-            # Si premier step de l'épisode
-            if not self.episode_data[idx]['tracker_initialized']:
-                self.tracker.reset_episode()
-                self.episode_data[idx]['tracker_initialized'] = True
-            
-            # Enregistrer le step
-            if 'state' in info:
-                self.tracker.step(
-                    state=info['state'],
-                    reward=reward,
-                    terminated=done,
-                    truncated=False,
-                    info=info
-                )
-            
-            # Si épisode terminé
-            if done:
-                self.tracker.end_episode()
-                self.episode_data[idx]['tracker_initialized'] = False
-                self.episode_data[idx]['episode_reward'] = 0
-        
-        return True
-
-# --- Main Training Logic ---
-if __name__ == "__main__":
-    
-    # 1. Register the environment
-    gym.register(
-        id="Parking-v0",
-        entry_point="parking:ParkingEnv",
-        max_episode_steps=3000
-    )
-    print("Environnement 'Parking-v0' enregistré.")
-
-    # 2. Initialiser le tracker de performance
-    tracker = PerformanceTracker(log_file="parking_performance.txt", batch_size=100)
-    print("Tracker de performance initialisé.")
-
-    # 3. Create and wrap the environment
-    env_id = "Parking-v0"
-    n_envs = 8  # Environnements parallèles
-    
-    def make_env():
-        env = gym.make(env_id)
-        env = NormalizeObservation(env)
-        env = NormalizeAction(env)
+# -- env factory --
+def make_env(rank, seed=0):
+    def _init():
+        env = gym.make("Parking-v0")
+        # Don't wrap with Monitor here - VecMonitor will handle it
         return env
+    return _init
 
-    vec_env = make_vec_env(make_env, n_envs=n_envs)
-    print(f"{n_envs} environnements vectorisés créés.")
+if __name__ == "__main__":
+    # configuration (tweakable)
+    NUM_CPU = 8
+    TOTAL_TIMESTEPS = 5_000_000
+    MODEL_NAME = "ppo_parking_lidar"
+    LOG_DIR = "./logs/"
+    MODEL_DIR = "./models/"
+    EVAL_FREQ = 50_000           # evaluate every this many environment steps
+    EVAL_EPISODES = 50
 
-    # 4. Instantiate PPO agent avec hyperparamètres optimisés
-    model = PPO(
-        "MlpPolicy", 
-        vec_env, 
-        verbose=1, 
-        learning_rate=5e-4,          # Augmenté (était 3e-4)
-        n_steps=4096,                # Augmenté (était 2048)
-        batch_size=64,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        clip_range=0.2,
-        ent_coef=0.05,               # Augmenté pour plus d'exploration (était 0.01)
-        vf_coef=0.5,
-        max_grad_norm=0.5,
-        tensorboard_log="./ppo_parking_tensorboard/"
+    os.makedirs(LOG_DIR, exist_ok=True)
+    os.makedirs(MODEL_DIR, exist_ok=True)
+
+    # Create vectorized training envs
+    env_fns = [make_env(i) for i in range(NUM_CPU)]
+    vec_env = SubprocVecEnv(env_fns)
+    # Wrap with VecMonitor so that episode rewards/lengths are tracked in the vectorized env
+    vec_env = VecMonitor(vec_env)
+
+    # IMPORTANT: Use VecNormalize for observation normalization.
+    # We normalize observations (norm_obs=True). We keep norm_reward=False by default.
+    # Note: When saving/loading models you must also save/load the VecNormalize wrapper.
+    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=False, clip_obs=10.0)
+
+    print(f"{NUM_CPU} environnements vectorisés créés et normalisés (VecNormalize).")
+
+    # PPO hyperparameters — tuned for stability with multiple envs (feel free to adjust)
+    ppo_params = {
+        'learning_rate': 3e-4,
+        'n_steps': 4096,          # must be divisible by num_envs (4096 / 8 = 512)
+        'batch_size': 64,
+        'n_epochs': 10,
+        'gamma': 0.99,
+        'gae_lambda': 0.95,
+        'clip_range': 0.2,
+        'ent_coef': 0.01,         # reduce entropy to stabilize policy (was 0.05)
+        'vf_coef': 0.5,
+        'max_grad_norm': 0.5,
+        'tensorboard_log': LOG_DIR,
+        'device': 'auto'
+    }
+
+    # Create or load the model
+    model_path = os.path.join(MODEL_DIR, f"{MODEL_NAME}.zip")
+    if os.path.exists(model_path):
+        print(f"Chargement du modèle existant: {model_path}")
+        # When loading, pass the vec_env and load normalization separately if you saved VecNormalize
+        model = PPO.load(model_path, env=vec_env)
+    else:
+        print("Création d'un nouveau modèle PPO...")
+        model = PPO('MlpPolicy', vec_env, verbose=1, **ppo_params)
+
+    # Checkpoint callback
+    checkpoint_callback = CheckpointCallback(
+        save_freq=max(50_000 // NUM_CPU, 1),  # approximate number of steps (env steps -> freq scaled)
+        save_path=MODEL_DIR,
+        name_prefix=MODEL_NAME
     )
 
-    # 5. Create callback
-    callback = PerformanceCallback(tracker=tracker, verbose=1)
-
-    # 6. Train the agent
-    total_timesteps = 2_000_000  # 2M timesteps
-    print(f"Début de l'entraînement pour {total_timesteps:,} timesteps...")
-    print(f"Les performances seront loggées dans 'parking_performance.txt'")
-    print(f"Un batch = 100 épisodes\n")
+    # Evaluation environment (deterministic evaluation)
+    # Must match training env wrapper structure: VecMonitor(VecNormalize(VecEnv))
+    def make_eval_env():
+        env = gym.make("Parking-v0")
+        return env
     
+    eval_vec = DummyVecEnv([make_eval_env])
+    eval_vec = VecMonitor(eval_vec)  # Add VecMonitor to match training
+    # Use VecNormalize for eval (will sync with training stats)
+    eval_vec = VecNormalize(eval_vec, norm_obs=True, norm_reward=False, clip_obs=10.0, training=False)
+
+    eval_callback = EvalCallback(
+        eval_vec,                 # Use the normalized eval env
+        best_model_save_path=MODEL_DIR,
+        log_path=LOG_DIR,
+        eval_freq=EVAL_FREQ,
+        n_eval_episodes=EVAL_EPISODES,
+        deterministic=True,
+        render=False
+    )
+
+    print("\n" + "="*80)
+    print("CONFIGURATION D'ENTRAÎNEMENT (LIDAR)")
+    print("="*80)
+    print(f"✅ Agent PPO (adjusted hyperparams)")
+    print(f"✅ Environnements parallèles: {NUM_CPU}")
+    print(f"✅ Observation normalization: VecNormalize (clip_obs=10.0)")
+    print(f"✅ Evaluations every {EVAL_FREQ} steps ({EVAL_EPISODES} episodes)")
+    print(f"✅ Entraînement pour {TOTAL_TIMESTEPS} timesteps")
+    print("="*80 + "\n")
+
+    print("Début de l'entraînement...")
+
     try:
         model.learn(
-            total_timesteps=total_timesteps, 
-            callback=callback,
+            total_timesteps=TOTAL_TIMESTEPS,
+            callback=[checkpoint_callback, eval_callback],
             progress_bar=True
         )
     except KeyboardInterrupt:
         print("\nEntraînement interrompu par l'utilisateur.")
-    
-    print("\nEntraînement terminé.")
-    
-    # 7. Save the trained model
-    model_save_path = "./ppo_parking_model_improved"
-    model.save(model_save_path)
-    print(f"Modèle sauvegardé à : {model_save_path}.zip")
-    
-    # 8. Afficher le résumé final
-    summary = tracker.get_summary()
-    print("\n" + "="*80)
-    print("RÉSUMÉ FINAL")
-    print("="*80)
-    print(f"Total d'épisodes: {summary['total_episodes']}")
-    print(f"Taux de succès récent (100 derniers): {summary['recent_success_rate']:.1f}%")
-    print(f"Voir 'parking_performance.txt' pour le détail complet")
-    print("="*80)
+
+    # Save final model AND the VecNormalize wrapper state (important!)
+    final_model_path = os.path.join(MODEL_DIR, f"{MODEL_NAME}_final.zip")
+    model.save(final_model_path)
+    print(f"Modèle final sauvegardé sous: {final_model_path}")
+
+    # Save VecNormalize statistics so you can normalize at inference / evaluation time
+    vecnorm_path = os.path.join(MODEL_DIR, f"{MODEL_NAME}_vecnormalize.npy")
+    try:
+        # VecNormalize has save/load only on the wrapper level via pickle; here we use its save method
+        vec_env.save(vecnorm_path)
+        print(f"VecNormalize stats sauvegardés sous: {vecnorm_path}")
+    except Exception as e:
+        print("Impossible de sauvegarder VecNormalize (peut dépendre de la SB3 version):", e)
 
     vec_env.close()
+    eval_vec.close()

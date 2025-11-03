@@ -1,0 +1,60 @@
+================================================================================
+REWARD FUNCTION ANALYSIS SUMMARY
+================================================================================
+
+EPISODE RESULTS
+--------------------------------------------------------------------------------
+Total Episodes: 2
+✅ Successes: 0 (0.0%)
+❌ Collisions: 0 (0.0%)
+⚠️  Out of Bounds: 0 (0.0%)
+⏱️  Timeouts: 0 (0.0%)
+
+REWARD COMPONENTS ANALYSIS (for tuning)
+--------------------------------------------------------------------------------
+
+Average contribution per episode (across all episodes):
+  alignment                :     0.00 ± 0.00
+  collision                :     0.00 ± 0.00
+  in_spot                  :     0.00 ± 0.00
+  out_of_bounds            :     0.00 ± 0.00
+  progress                 :    92.43 ± 10.53
+  safety                   :    -1.62 ± 0.94
+  step_cost                :    -7.69 ± 2.03
+  success                  :     0.00 ± 0.00
+  total                    :    83.12 ± 11.62
+  vel_near_goal            :     0.00 ± 0.00
+
+
+PERFORMANCE METRICS
+--------------------------------------------------------------------------------
+
+Overall averages:
+  Minimum Distance to Target (m)          : 3.26
+  Final Distance (m)                      : 3.26
+  Average Velocity (m/s)                  : 0.94
+  Max Velocity (m/s)                      : 2.18
+  Direction Changes                       : 244.00
+  Steps in Reverse                        : 297.00
+  Close Calls (<2m)                       : 63.50
+  Closest Obstacle (m)                    : 1.64
+
+
+FAILURE EPISODES ANALYSIS:
+--------------------------------------------------------------------------------
+Failure breakdown:
+
+
+RECOMMENDATIONS FOR REWARD TUNING:
+--------------------------------------------------------------------------------
+⚠️  LOW SUCCESS RATE:
+   - Consider increasing progress reward scale
+   - Check if success conditions are too strict
+   - May need more training time
+
+⚠️  MANY CLOSE CALLS:
+   - Agent is taking risky paths
+   - Consider increasing safety_threshold
+
+
+================================================================================
