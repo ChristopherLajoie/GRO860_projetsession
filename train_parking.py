@@ -33,7 +33,7 @@ def make_env(rank, seed=0):
 if __name__ == "__main__":
     # configuration (tweakable)
     NUM_CPU = 8
-    TOTAL_TIMESTEPS = 5_000_000
+    TOTAL_TIMESTEPS = 1_000_000
     MODEL_NAME = "ppo_parking_lidar"
     LOG_DIR = "./logs/"
     MODEL_DIR = "./models/"
@@ -82,12 +82,8 @@ if __name__ == "__main__":
         print("Création d'un nouveau modèle PPO...")
         model = PPO('MlpPolicy', vec_env, verbose=1, **ppo_params)
 
-    # Checkpoint callback
-    checkpoint_callback = CheckpointCallback(
-        save_freq=max(50_000 // NUM_CPU, 1),  # approximate number of steps (env steps -> freq scaled)
-        save_path=MODEL_DIR,
-        name_prefix=MODEL_NAME
-    )
+    # Checkpoint callback (set to None to avoid periodic .zip checkpoints)
+    checkpoint_callback = None
 
     # Evaluation environment (deterministic evaluation)
     # Must match training env wrapper structure: VecMonitor(VecNormalize(VecEnv))
@@ -122,10 +118,14 @@ if __name__ == "__main__":
 
     print("Début de l'entraînement...")
 
+    callbacks = [eval_callback]
+    if checkpoint_callback is not None:
+        callbacks.append(checkpoint_callback)
+
     try:
         model.learn(
             total_timesteps=TOTAL_TIMESTEPS,
-            callback=[checkpoint_callback, eval_callback],
+            callback=callbacks,
             progress_bar=True
         )
     except KeyboardInterrupt:
@@ -137,7 +137,7 @@ if __name__ == "__main__":
     print(f"Modèle final sauvegardé sous: {final_model_path}")
 
     # Save VecNormalize statistics so you can normalize at inference / evaluation time
-    vecnorm_path = os.path.join(MODEL_DIR, f"{MODEL_NAME}_vecnormalize.npy")
+    vecnorm_path = os.path.join(MODEL_DIR, f"{MODEL_NAME}_vecnormalize.pkl")
     try:
         # VecNormalize has save/load only on the wrapper level via pickle; here we use its save method
         vec_env.save(vecnorm_path)

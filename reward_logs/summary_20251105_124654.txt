@@ -1,0 +1,10 @@
+================================================================================
+Reward Analysis Summary - 20251105_124654
+================================================================================
+Episodes: 5
+Success rate: 2/5 (40.0%)
+Timeouts: 0, Crashes: 3, OOB: 0
+Avg steps: 1108.4
+Avg total reward: -77.17
+Min distance (avg across eps): 2.33 m
+Max speed (avg across eps): 1.02 m/s
