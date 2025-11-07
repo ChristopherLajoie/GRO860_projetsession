@@ -15,8 +15,8 @@ MAX_VY = 12.0
 WIDTH = 400
 HEIGHT = 600
 PIPE_W = 60
-PIPE_VX = -3.0
-GAP_HEIGHT = 120
+PIPE_VX = -8.0
+GAP_HEIGHT = 110
 BIRD_X = 80
 BIRD_SIZE = 24
 
@@ -28,18 +28,19 @@ class PhysicsConfig:
     moving_pipes: bool = False
     energy: bool = False
     moving_amp: float = 35.0
-    moving_omega: float = 0.03
+    moving_omega: float = 0.05
     pipe_vx: float = PIPE_VX
     gap_height_range: tuple[float, float] = (GAP_HEIGHT - 15, GAP_HEIGHT + 15)
     gap_center_bounds: tuple[float, float] = (HEIGHT * 0.2, HEIGHT * 0.8)
     energy_cost: float = 0.12
     energy_regen: float = 0.01
-    wind_mu: float = 0.35
-    wind_theta: float = 0.01
-    wind_sigma: float = 0.05
-    wind_mag_clamp: float = 0.45
-    wind_dir_flip_prob: float = 0.001
-    wind_dir_min_steps: int = 600
+    wind_mu: float = 0.25
+    wind_theta: float = 0.008
+    wind_sigma: float = 0.015
+    wind_mag_clamp: float = 0.35
+    wind_dir_flip_prob: float = 0.0
+    wind_dir_min_steps: int = 9999
+    pipe_speed_growth: float = 0.08
 
 
 def init_state(rng: np.random.Generator) -> Dict[str, float]:
@@ -121,7 +122,11 @@ def step_dynamics(state: dict, action: int, cfg: PhysicsConfig, rng: np.random.G
     if cfg.wind:
         wind_dir = state.get("wind_dir", 1.0)
         dir_steps = state.get("wind_dir_steps", 0) + 1
-        if dir_steps >= cfg.wind_dir_min_steps and rng.random() < cfg.wind_dir_flip_prob:
+        if (
+            cfg.wind_dir_flip_prob > 0.0
+            and dir_steps >= cfg.wind_dir_min_steps
+            and rng.random() < cfg.wind_dir_flip_prob
+        ):
             wind_dir = 1.0 if rng.random() < 0.5 else -1.0
             dir_steps = 0
         wind_mag = ou_step(
@@ -143,12 +148,14 @@ def step_dynamics(state: dict, action: int, cfg: PhysicsConfig, rng: np.random.G
 
     bird_y = clamp(state["bird_y"] + vy, 0.0, HEIGHT)
 
-    x_pipe = state["x_pipe"] + state.get("pipe_vx", cfg.pipe_vx)
-    pipe_vx = state.get("pipe_vx", cfg.pipe_vx)
+    progress = max(state.get("pipes_passed", 0), state.get("t", 0) / 800)
+    speed_multiplier = 1.0 + cfg.pipe_speed_growth * progress
+    pipe_vx = cfg.pipe_vx * speed_multiplier
+    x_pipe = state["x_pipe"] + pipe_vx
 
     if x_pipe + PIPE_W < 0.0:
         x_pipe = WIDTH + rng.uniform(40.0, 120.0)
-        pipe_vx = cfg.pipe_vx
+        pipe_vx = cfg.pipe_vx * speed_multiplier
         gap_height = _sample_gap_height(cfg, rng)
         gap_center = _sample_gap_center(cfg, rng)
         new_state["gap_height"] = gap_height
