@@ -1,0 +1,12 @@
+# Auto-generated run config
+algo: DQN
+seed: 3
+total_steps: 400000
+wind: True
+moving_pipes: True
+three_flaps: False
+use_rays: False
+energy: False
+curriculum: True
+gap_range: (115.0, 130.0)
+git: e39b6f2be37054a8fb9baedaef6296a20a5bfb50
