@@ -53,7 +53,7 @@ class FlappyEnv(gym.Env):
         self.energy = energy
         self._gap_height_range = gap_height_range
         self.render_mode = render_mode
-        self.max_steps = 2000
+        self.max_steps: int | None = None
 
         self._cfg = PhysicsConfig(
             three_flaps=three_flaps,
@@ -126,7 +126,7 @@ class FlappyEnv(gym.Env):
         crash = collides(bird_bb, pipe_bb)
         out_of_bounds = new_state["bird_y"] <= 0.0 or new_state["bird_y"] >= HEIGHT
         terminated = crash or out_of_bounds
-        truncated = self._steps >= self.max_steps
+        truncated = False if self.max_steps is None else self._steps >= self.max_steps
 
         dist = abs(new_state["bird_y"] - new_state["gap_center_y"])
         prev_dist = self._prev_dist if self._steps > 1 else dist

@@ -20,7 +20,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=20)
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--record", help="Path to MP4/ GIF for saving rollouts")
-    parser.add_argument("--success-threshold", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--wind", action="store_true")
     parser.add_argument("--moving-pipes", action="store_true")
@@ -79,11 +78,10 @@ def main() -> None:
         scores.append(info.get("pipes", 0))
         if args.record:
             frames.extend(episode_frames)
-    success = sum(1 for s in scores if s >= args.success_threshold) / len(scores)
     stats = {
-        "success_rate": success,
         "mean_pipes": float(np.mean(scores)),
         "median_pipes": float(np.median(scores)),
+        "max_pipes": float(np.max(scores)) if scores else 0.0,
         "mean_length": float(np.mean(lengths)),
     }
     print("Evaluation stats:", stats)

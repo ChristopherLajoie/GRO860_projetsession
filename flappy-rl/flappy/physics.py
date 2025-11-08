@@ -40,7 +40,7 @@ class PhysicsConfig:
     wind_mag_clamp: float = 0.35
     wind_dir_flip_prob: float = 0.0
     wind_dir_min_steps: int = 9999
-    pipe_speed_growth: float = 0.08
+    pipe_speed_growth: float = 0.03
 
 
 def init_state(rng: np.random.Generator) -> Dict[str, float]:
