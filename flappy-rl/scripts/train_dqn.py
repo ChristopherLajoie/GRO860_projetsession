@@ -44,19 +44,34 @@ def unwrap(env):
 
 
 class CurriculumCallback(BaseCallback):
-    def __init__(self, stages: List[Dict[str, Any]], thresholds: List[float], enabled: bool) -> None:
+    def __init__(
+        self,
+        stages: List[Dict[str, Any]],
+        thresholds: List[float],
+        enabled: bool,
+        min_stage_steps: int,
+        checkpoint_dir: Path,
+        log_every: int = 1000,
+        max_stage_steps: int = 300_000,
+    ) -> None:
         super().__init__()
         self.stages = stages
         self.thresholds = thresholds
         self.enabled = enabled
         self.stage_idx = 0
         self.buffer = deque(maxlen=50)
+        self.min_stage_steps = min_stage_steps
+        self.max_stage_steps = max_stage_steps
+        self.checkpoint_dir = checkpoint_dir
+        self.log_every = log_every
+        self._last_log_step = 0
+        self.last_stage_step = 0
 
     def _on_training_start(self) -> None:
         if self.enabled:
-            self._apply_stage()
+            self._apply_stage(initial=True)
 
-    def _apply_stage(self) -> None:
+    def _apply_stage(self, initial: bool = False) -> None:
         cfg = self.stages[self.stage_idx]
         for env in self.training_env.envs:
             base = unwrap(env)
@@ -65,25 +80,75 @@ class CurriculumCallback(BaseCallback):
                     gap_height_range=cfg["gap_range"],
                     moving_pipes=cfg["moving_pipes"],
                     wind=cfg["wind"],
+                    pipe_speed=cfg.get("pipe_speed"),
+                    pipe_speed_growth=cfg.get("pipe_speed_growth"),
+                    wind_mu=cfg.get("wind_mu"),
+                    moving_amp=cfg.get("moving_amp"),
+                    moving_omega=cfg.get("moving_omega"),
                 )
-        print(f"[Curriculum] Stage {self.stage_idx} -> {cfg}")
+        self.last_stage_step = self.model.num_timesteps if hasattr(self.model, "num_timesteps") else 0
+        self._record_curriculum(cfg, force=True)
+        if not initial:
+            print(f"[Curriculum] Stage {self.stage_idx} -> {cfg}")
 
     def _on_step(self) -> bool:
         if not self.enabled or self.stage_idx >= len(self.stages) - 1:
             return True
+        cfg = self.stages[self.stage_idx]
+        if self.model.num_timesteps - self._last_log_step >= self.log_every:
+            self._record_curriculum(cfg)
+        if self.model.num_timesteps - self.last_stage_step < self.min_stage_steps:
+            return True
+
         infos = self.locals.get("infos", [])
         dones = self.locals.get("dones", [])
         for done, info in zip(dones, infos):
             if done and "pipes" in info:
                 self.buffer.append(info["pipes"])
+
+        advanced = False
         if len(self.buffer) == self.buffer.maxlen:
             avg = sum(self.buffer) / len(self.buffer)
             threshold = self.thresholds[self.stage_idx]
             if avg >= threshold:
-                self.stage_idx += 1
-                self._apply_stage()
-                self.buffer.clear()
+                advanced = True
+
+        if not advanced and self.model.num_timesteps - self.last_stage_step >= self.max_stage_steps:
+            advanced = True
+
+        if advanced:
+            self._save_stage_checkpoint("pre")
+            self.stage_idx += 1
+            self.buffer.clear()
+            self._apply_stage()
+            self._save_stage_checkpoint("post")
         return True
+
+    def _save_stage_checkpoint(self, prefix: str) -> None:
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        path = self.checkpoint_dir / f"stage{self.stage_idx}_{prefix}.zip"
+        try:
+            self.model.save(str(path))
+            print(f"[Curriculum] Saved checkpoint {path}")
+        except Exception as exc:
+            print(f"[Curriculum] Failed to save checkpoint {path}: {exc}")
+
+    def _record_curriculum(self, cfg: Dict[str, Any], force: bool = False) -> None:
+        self._last_log_step = self.model.num_timesteps
+        self.model.logger.record("curriculum/stage", float(self.stage_idx), exclude="stdout")
+        self.model.logger.record("curriculum/gap_min", cfg["gap_range"][0], exclude="stdout")
+        self.model.logger.record("curriculum/gap_max", cfg["gap_range"][1], exclude="stdout")
+        self.model.logger.record("curriculum/moving_pipes", float(cfg["moving_pipes"]), exclude="stdout")
+        self.model.logger.record("curriculum/wind", float(cfg["wind"]), exclude="stdout")
+        if cfg.get("pipe_speed") is not None:
+            self.model.logger.record("curriculum/pipe_speed", float(cfg["pipe_speed"]), exclude="stdout")
+        if cfg.get("pipe_speed_growth") is not None:
+            self.model.logger.record(
+                "curriculum/pipe_speed_growth",
+                float(cfg["pipe_speed_growth"]),
+                exclude="stdout",
+            )
+        self.model.logger.dump(self.model.num_timesteps)
 
 
 class ProgressCallback(BaseCallback):
@@ -208,13 +273,67 @@ def main() -> None:
     )
 
     curriculum_stages = [
-        {"gap_range": gap_range or (130, 140), "moving_pipes": False, "wind": False},
-        {"gap_range": (115, 130), "moving_pipes": False, "wind": False},
-        {"gap_range": (110, 125), "moving_pipes": True, "wind": False},
-        {"gap_range": (105, 120), "moving_pipes": True, "wind": True},
+        {
+            "gap_range": gap_range or (150, 165),
+            "moving_pipes": False,
+            "wind": False,
+            "pipe_speed": -3.2,
+            "pipe_speed_growth": 0.0,
+        },
+        {
+            "gap_range": (135, 150),
+            "moving_pipes": False,
+            "wind": False,
+            "pipe_speed": -3.2,
+            "pipe_speed_growth": 0.0,
+        },
+        {
+            "gap_range": (130, 145),
+            "moving_pipes": True,
+            "wind": False,
+            "pipe_speed": -3.5,
+            "pipe_speed_growth": 0.01,
+            "moving_amp": 18.0,
+            "moving_omega": 0.03,
+        },
+        {
+            "gap_range": (120, 135),
+            "moving_pipes": True,
+            "wind": True,
+            "pipe_speed": -4.0,
+            "pipe_speed_growth": 0.015,
+            "wind_mu": 0.18,
+        },
+        {
+            "gap_range": (110, 125),
+            "moving_pipes": True,
+            "wind": True,
+            "pipe_speed": -5.5,
+            "pipe_speed_growth": 0.02,
+            "wind_mu": 0.22,
+            "moving_amp": 24.0,
+        },
+        {
+            "gap_range": (100, 115),
+            "moving_pipes": True,
+            "wind": True,
+            "pipe_speed": -7.0,
+            "pipe_speed_growth": 0.03,
+            "wind_mu": 0.25,
+            "moving_amp": 30.0,
+            "moving_omega": 0.05,
+        },
     ]
-    thresholds = [15, 20, 25]
-    curriculum_cb = CurriculumCallback(curriculum_stages, thresholds, args.curriculum)
+    thresholds = [2, 4, 6, 9, 12, 15]
+    curriculum_cb = CurriculumCallback(
+        curriculum_stages,
+        thresholds,
+        args.curriculum,
+        min_stage_steps=80_000,
+        checkpoint_dir=logdir / "curriculum",
+        log_every=2000,
+        max_stage_steps=250_000,
+    )
 
     model = DQN(
         "MlpPolicy",

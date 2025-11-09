@@ -216,6 +216,11 @@ class FlappyEnv(gym.Env):
         gap_height_range: tuple[float, float] | None = None,
         moving_pipes: bool | None = None,
         wind: bool | None = None,
+        pipe_speed: float | None = None,
+        pipe_speed_growth: float | None = None,
+        wind_mu: float | None = None,
+        moving_amp: float | None = None,
+        moving_omega: float | None = None,
     ) -> None:
         """Update runtime difficulty parameters without recreating the env."""
         if gap_height_range is not None:
@@ -226,6 +231,18 @@ class FlappyEnv(gym.Env):
         if wind is not None:
             self.wind = wind
             self._cfg.wind = wind
+        if pipe_speed is not None:
+            self._cfg.pipe_vx = pipe_speed
+            if self._state is not None:
+                self._state["pipe_vx"] = pipe_speed
+        if pipe_speed_growth is not None:
+            self._cfg.pipe_speed_growth = pipe_speed_growth
+        if wind_mu is not None:
+            self._cfg.wind_mu = wind_mu
+        if moving_amp is not None:
+            self._cfg.moving_amp = moving_amp
+        if moving_omega is not None:
+            self._cfg.moving_omega = moving_omega
 
     def _compute_reward(
         self,

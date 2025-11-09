@@ -1,12 +1,12 @@
 # Auto-generated run config
 algo: DQN
-seed: 3
-total_steps: 400000
-wind: True
-moving_pipes: True
+seed: 0
+total_steps: 10000000
+wind: False
+moving_pipes: False
 three_flaps: False
 use_rays: False
 energy: False
 curriculum: True
-gap_range: (115.0, 130.0)
-git: e39b6f2be37054a8fb9baedaef6296a20a5bfb50
+gap_range: None
+git: abdbe503d2e96c70d4f65eae8b074a19c9fbee2c
