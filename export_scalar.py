@@ -49,5 +49,5 @@ def export_scalars(logdir: Path, out_csv: Path, allowed_runs: Optional[Set[str]]
 if __name__ == "__main__":
     logdir = Path("runs/ppo")  # change if needed
     out_csv = Path("tensorboard_scalars.csv")
-    allowed = {"PPO_8", "PPO_9"}  # e.g. {"DQN_3", "DQN_5"} to export only those runs
+    allowed = {"PPO_10"}  # e.g. {"DQN_3", "DQN_5"} to export only those runs
     export_scalars(logdir, out_csv, allowed)

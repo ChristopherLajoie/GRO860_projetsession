@@ -357,8 +357,18 @@ def main() -> None:
             "moving_amp": 30.0,
             "moving_omega": 0.05,
         },
+        {
+            "gap_range": (90, 105),
+            "moving_pipes": True,
+            "wind": True,
+            "pipe_speed": -8.0,
+            "pipe_speed_growth": 0.04,
+            "wind_mu": 0.3,
+            "moving_amp": 35.0,
+            "moving_omega": 0.06,
+        },
     ]
-    thresholds = [2, 4, 6, 9, 12, 15]
+    thresholds = [1.5, 3, 4.5, 6, 8, 10, 12]
     curriculum_cb = CurriculumCallback(
         curriculum_stages,
         thresholds,
