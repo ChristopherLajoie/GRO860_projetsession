@@ -1,7 +1,7 @@
 # Auto-generated run config
 algo: PPO
 seed: 0
-total_steps: 7000000
+total_steps: 5000000
 wind: False
 moving_pipes: False
 three_flaps: False
@@ -9,4 +9,5 @@ use_rays: False
 energy: False
 curriculum: True
 gap_range: None
+run_name: PPO_13
 git: 72725b6a1bd99ab1fcd530c83ec7abec5a8c2c18

@@ -6,7 +6,7 @@ import argparse
 import subprocess
 from collections import deque
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 from stable_baselines3 import DQN, PPO
@@ -68,6 +68,13 @@ def make_env(args: argparse.Namespace, seed_offset: int = 0) -> FlappyEnv:
     return env
 
 
+def linear_schedule(start: float, end: float) -> Callable[[float], float]:
+    def schedule(progress_remaining: float) -> float:
+        return end + (start - end) * progress_remaining
+
+    return schedule
+
+
 def write_config(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     git_hash = "unknown"
@@ -119,7 +126,7 @@ class CurriculumCallback(BaseCallback):
         min_stage_steps: int,
         checkpoint_dir: Path,
         log_every: int = 2000,
-        max_stage_steps: int = 250_000,
+        max_stage_steps: Optional[List[int]] = None,
     ) -> None:
         super().__init__()
         self.stages = stages
@@ -128,7 +135,12 @@ class CurriculumCallback(BaseCallback):
         self.stage_idx = 0
         self.buffer = deque(maxlen=50)
         self.min_stage_steps = min_stage_steps
-        self.max_stage_steps = max_stage_steps
+        if max_stage_steps is None:
+            self.max_stage_steps = [350_000] * len(stages)
+        else:
+            if len(max_stage_steps) != len(stages):
+                raise ValueError("max_stage_steps must match number of stages")
+            self.max_stage_steps = max_stage_steps
         self.checkpoint_dir = checkpoint_dir
         self.log_every = log_every
         self._last_log_step = 0
@@ -177,7 +189,8 @@ class CurriculumCallback(BaseCallback):
             threshold = self.thresholds[self.stage_idx]
             if avg >= threshold:
                 advanced = True
-        if not advanced and self.model.num_timesteps - self.last_stage_step >= self.max_stage_steps:
+        max_steps = self.max_stage_steps[self.stage_idx]
+        if not advanced and self.model.num_timesteps - self.last_stage_step >= max_steps:
             advanced = True
         if advanced:
             self._save_stage_checkpoint("pre")
@@ -243,14 +256,14 @@ def build_model(args: argparse.Namespace, vec_env, logdir: Path):
         return DQN(
             "MlpPolicy",
             vec_env,
-            learning_rate=1e-4,
-            buffer_size=200_000,
+            learning_rate=linear_schedule(1e-4, 2e-5),
+            buffer_size=300_000,
             batch_size=256,
             gamma=0.99,
             train_freq=4,
-            target_update_interval=5000,
-            exploration_final_eps=0.02,
-            exploration_fraction=0.4,
+            target_update_interval=6000,
+            exploration_final_eps=0.01,
+            exploration_fraction=0.5,
             tau=0.005,
             tensorboard_log=str(logdir),
             verbose=1,
@@ -259,13 +272,13 @@ def build_model(args: argparse.Namespace, vec_env, logdir: Path):
     return PPO(
         "MlpPolicy",
         vec_env,
-        learning_rate=1.5e-4,
-        n_steps=4096,
+        learning_rate=linear_schedule(1.5e-4, 5e-5),
+        n_steps=6144,
         batch_size=512,
-        clip_range=0.25,
+        clip_range=0.3,
         gae_lambda=0.95,
-        ent_coef=0.005,
-        vf_coef=0.6,
+        ent_coef=0.007,
+        vf_coef=0.55,
         max_grad_norm=0.5,
         tensorboard_log=str(logdir),
         seed=args.seed,
@@ -278,6 +291,17 @@ def main() -> None:
     gap_range = _gap_range_from_args(args)
     logdir = Path(args.logdir)
     logdir.mkdir(parents=True, exist_ok=True)
+
+    prefix = args.algo.upper()
+    existing = []
+    for path in logdir.glob(f"{prefix}_*"):
+        try:
+            existing.append(int(path.name.split("_")[-1]))
+        except ValueError:
+            continue
+    run_idx = max(existing, default=0) + 1
+    run_dir = logdir / f"{prefix}_{run_idx}"
+    run_dir.mkdir(exist_ok=True)
 
     vec_env = DummyVecEnv([lambda: Monitor(make_env(args, 0))])
 
@@ -300,8 +324,8 @@ def main() -> None:
         eval_env,
         n_eval_episodes=args.eval_episodes,
         eval_freq=20_000,
-        best_model_save_path=str(logdir),
-        log_path=str(logdir),
+        best_model_save_path=str(run_dir),
+        log_path=str(run_dir),
         deterministic=True,
         render=args.render_eval,
     )
@@ -358,6 +382,16 @@ def main() -> None:
             "moving_omega": 0.05,
         },
         {
+            "gap_range": (92, 108),
+            "moving_pipes": True,
+            "wind": True,
+            "pipe_speed": -8.0,
+            "pipe_speed_growth": 0.035,
+            "wind_mu": 0.28,
+            "moving_amp": 34.0,
+            "moving_omega": 0.055,
+        },
+        {
             "gap_range": (90, 105),
             "moving_pipes": True,
             "wind": True,
@@ -367,22 +401,32 @@ def main() -> None:
             "moving_amp": 35.0,
             "moving_omega": 0.06,
         },
+        {
+            "gap_range": (85, 100),
+            "moving_pipes": True,
+            "wind": True,
+            "pipe_speed": -8.5,
+            "pipe_speed_growth": 0.045,
+            "wind_mu": 0.33,
+            "moving_amp": 38.0,
+            "moving_omega": 0.065,
+        },
     ]
-    thresholds = [1.5, 3, 4.5, 6, 8, 10, 12]
+    thresholds = [1.2, 2.2, 3.8, 5.2, 6.8, 8.8, 11.0, 13.0, 15.0]
     curriculum_cb = CurriculumCallback(
         curriculum_stages,
         thresholds,
         args.curriculum,
         min_stage_steps=80_000,
-        checkpoint_dir=logdir / "curriculum",
+        checkpoint_dir=run_dir / "curriculum",
         log_every=2000,
-        max_stage_steps=250_000,
+        max_stage_steps=[200_000, 250_000, 320_000, 380_000, 450_000, 520_000, 620_000, 720_000, 850_000],
     )
 
-    model = build_model(args, vec_env, logdir)
+    model = build_model(args, vec_env, run_dir)
 
     write_config(
-        logdir / "config.yaml",
+        run_dir / "config.yaml",
         {
             "algo": args.algo.upper(),
             "seed": args.seed,
@@ -394,6 +438,7 @@ def main() -> None:
             "energy": args.energy,
             "curriculum": args.curriculum,
             "gap_range": gap_range,
+            "run_name": f"{prefix}_{run_idx}",
         },
     )
 
@@ -415,7 +460,10 @@ def main() -> None:
 
     stats = evaluate_model(model, final_env, args.eval_episodes, args.render_eval)
     print("Evaluation:", stats)
-    model.save(logdir / f"latest_{args.algo}")
+    per_run_path = run_dir / f"{prefix}_{run_idx}_latest.zip"
+    model.save(per_run_path)
+    latest_path = logdir / f"latest_{args.algo}.zip"
+    model.save(latest_path)
 
 
 if __name__ == "__main__":
