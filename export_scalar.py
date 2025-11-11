@@ -8,18 +8,28 @@ from typing import Iterable, Optional, Set
 from tensorboard.backend.event_processing import event_accumulator
 
 
-def iter_event_files(logdir: Path, allowed_runs: Optional[Set[str]]) -> Iterable[Path]:
+def _run_id_for(path: Path, root: Path) -> str:
+    path = path.resolve()
+    root = root.resolve()
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        return path.parent.name
+    parts = rel.parts
+    return parts[0] if parts else path.parent.name
+
+
+def iter_event_files(logdir: Path, allowed_runs: Optional[Set[str]]) -> Iterable[tuple[Path, str]]:
     for path in logdir.rglob("events.out.tfevents.*"):
-        run = path.parent.name
-        if allowed_runs is not None and run not in allowed_runs:
+        run_id = _run_id_for(path, logdir)
+        if allowed_runs is not None and run_id not in allowed_runs:
             continue
-        yield path
+        yield path, run_id
 
 
 def export_scalars(logdir: Path, out_csv: Path, allowed_runs: Optional[Set[str]] = None) -> None:
     rows = []
-    for event_path in iter_event_files(logdir, allowed_runs):
-        run = event_path.parent.name
+    for event_path, run in iter_event_files(logdir, allowed_runs):
         ea = event_accumulator.EventAccumulator(str(event_path))
         try:
             ea.Reload()
@@ -49,5 +59,5 @@ def export_scalars(logdir: Path, out_csv: Path, allowed_runs: Optional[Set[str]]
 if __name__ == "__main__":
     logdir = Path("runs/ppo")  # change if needed
     out_csv = Path("tensorboard_scalars.csv")
-    allowed = {"PPO_12"}  # e.g. {"DQN_3", "DQN_5"} to export only those runs
+    allowed = {"PPO_14"}  # e.g. {"PPO_14", "DQN_5"} to export only those runs
     export_scalars(logdir, out_csv, allowed)
