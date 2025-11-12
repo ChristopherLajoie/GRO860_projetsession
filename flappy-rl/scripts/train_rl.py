@@ -39,6 +39,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-episodes", type=int, default=10)
     parser.add_argument("--curriculum", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num-envs", type=int, default=8)
+    parser.add_argument("--max-pipe-speed", type=float, help="Cap absolute pipe speed (e.g., 7.5)")
     return parser.parse_args()
 
 
@@ -58,6 +59,7 @@ def make_env(args: argparse.Namespace, seed_offset: int = 0) -> FlappyEnv:
         moving_pipes=args.moving_pipes,
         energy=args.energy,
         gap_height_range=gap_range,
+        pipe_speed_cap=args.max_pipe_speed,
         render_mode=None,
         seed=args.seed + seed_offset,
     )
@@ -473,6 +475,12 @@ def main() -> None:
             "moving_omega": 0.065,
         },
     ]
+    if args.max_pipe_speed is not None:
+        cap = -abs(args.max_pipe_speed)
+        for stage in curriculum_stages:
+            ps = stage.get("pipe_speed")
+            if ps is not None and ps < cap:
+                stage["pipe_speed"] = cap
     thresholds = [1.2, 2.0, 2.8, 3.6, 4.6, 5.6, 6.8, 8.0, 9.4, 10.8, 12.3, 13.8, 15.3, 17.0, 19.0]
     curriculum_cb = CurriculumCallback(
         curriculum_stages,
@@ -515,6 +523,7 @@ def main() -> None:
         moving_pipes=args.moving_pipes,
         energy=args.energy,
         gap_height_range=gap_range,
+        pipe_speed_cap=args.max_pipe_speed,
         render_mode="human" if args.render_eval else None,
         seed=args.seed + 99,
     )

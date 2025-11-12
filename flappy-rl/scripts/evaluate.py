@@ -29,6 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--energy", action="store_true")
     parser.add_argument("--gap-min", type=float)
     parser.add_argument("--gap-max", type=float)
+    parser.add_argument("--max-pipe-speed", type=float)
     return parser.parse_args()
 
 
@@ -52,6 +53,7 @@ def main() -> None:
         moving_pipes=args.moving_pipes,
         energy=args.energy,
         gap_height_range=gap_range,
+        pipe_speed_cap=args.max_pipe_speed,
         render_mode=render_mode,
         seed=args.seed,
     )

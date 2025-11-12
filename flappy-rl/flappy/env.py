@@ -41,6 +41,7 @@ class FlappyEnv(gym.Env):
         moving_pipes: bool = False,
         energy: bool = False,
         gap_height_range: tuple[float, float] | None = None,
+        pipe_speed_cap: float | None = None,
         render_mode: str | None = None,
         seed: int | None = None,
     ) -> None:
@@ -54,6 +55,7 @@ class FlappyEnv(gym.Env):
         self._gap_height_range = gap_height_range
         self.render_mode = render_mode
         self.max_steps: int | None = None
+        self._pipe_speed_cap = None if pipe_speed_cap is None else -abs(pipe_speed_cap)
 
         self._cfg = PhysicsConfig(
             three_flaps=three_flaps,
@@ -61,6 +63,7 @@ class FlappyEnv(gym.Env):
             moving_pipes=moving_pipes,
             energy=energy,
             pipe_vx=PIPE_VX,
+            pipe_speed_cap=self._pipe_speed_cap,
         )
         if gap_height_range is not None:
             self._cfg.gap_height_range = gap_height_range
@@ -232,6 +235,8 @@ class FlappyEnv(gym.Env):
             self.wind = wind
             self._cfg.wind = wind
         if pipe_speed is not None:
+            if self._pipe_speed_cap is not None:
+                pipe_speed = max(pipe_speed, self._pipe_speed_cap)
             self._cfg.pipe_vx = pipe_speed
             if self._state is not None:
                 self._state["pipe_vx"] = pipe_speed

@@ -41,6 +41,7 @@ class PhysicsConfig:
     wind_dir_flip_prob: float = 0.0
     wind_dir_min_steps: int = 9999
     pipe_speed_growth: float = 0.03
+    pipe_speed_cap: float | None = None
 
 
 def init_state(rng: np.random.Generator) -> Dict[str, float]:
@@ -151,11 +152,15 @@ def step_dynamics(state: dict, action: int, cfg: PhysicsConfig, rng: np.random.G
     progress = max(state.get("pipes_passed", 0), state.get("t", 0) / 800)
     speed_multiplier = 1.0 + cfg.pipe_speed_growth * progress
     pipe_vx = cfg.pipe_vx * speed_multiplier
+    if cfg.pipe_speed_cap is not None:
+        pipe_vx = max(pipe_vx, cfg.pipe_speed_cap)
     x_pipe = state["x_pipe"] + pipe_vx
 
     if x_pipe + PIPE_W < 0.0:
         x_pipe = WIDTH + rng.uniform(40.0, 120.0)
         pipe_vx = cfg.pipe_vx * speed_multiplier
+        if cfg.pipe_speed_cap is not None:
+            pipe_vx = max(pipe_vx, cfg.pipe_speed_cap)
         gap_height = _sample_gap_height(cfg, rng)
         gap_center = _sample_gap_center(cfg, rng)
         new_state["gap_height"] = gap_height
