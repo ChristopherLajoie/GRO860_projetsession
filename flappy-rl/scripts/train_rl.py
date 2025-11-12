@@ -38,6 +38,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logdir", default="runs/unified")
     parser.add_argument("--eval-episodes", type=int, default=10)
     parser.add_argument("--curriculum", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--num-envs", type=int, default=8)
     return parser.parse_args()
 
 
@@ -303,7 +304,12 @@ def main() -> None:
     run_dir = logdir / f"{prefix}_{run_idx}"
     run_dir.mkdir(exist_ok=True)
 
-    vec_env = DummyVecEnv([lambda: Monitor(make_env(args, 0))])
+    def _make(idx: int):
+        def _init():
+            return Monitor(make_env(args, seed_offset=idx))
+        return _init
+
+    vec_env = DummyVecEnv([_make(i) for i in range(args.num_envs)])
 
     eval_env = Monitor(
         FlappyEnv(
@@ -335,32 +341,67 @@ def main() -> None:
             "gap_range": gap_range or (150, 165),
             "moving_pipes": False,
             "wind": False,
-            "pipe_speed": -3.2,
+            "pipe_speed": -3.0,
             "pipe_speed_growth": 0.0,
         },
         {
-            "gap_range": (135, 150),
+            "gap_range": (145, 160),
+            "moving_pipes": False,
+            "wind": False,
+            "pipe_speed": -3.1,
+            "pipe_speed_growth": 0.0,
+        },
+        {
+            "gap_range": (140, 155),
             "moving_pipes": False,
             "wind": False,
             "pipe_speed": -3.2,
             "pipe_speed_growth": 0.0,
         },
         {
+            "gap_range": (135, 150),
+            "moving_pipes": True,
+            "wind": False,
+            "pipe_speed": -3.4,
+            "pipe_speed_growth": 0.005,
+            "moving_amp": 15.0,
+            "moving_omega": 0.02,
+        },
+        {
             "gap_range": (130, 145),
             "moving_pipes": True,
             "wind": False,
-            "pipe_speed": -3.5,
-            "pipe_speed_growth": 0.01,
+            "pipe_speed": -3.7,
+            "pipe_speed_growth": 0.008,
             "moving_amp": 18.0,
             "moving_omega": 0.03,
+        },
+        {
+            "gap_range": (125, 140),
+            "moving_pipes": True,
+            "wind": False,
+            "pipe_speed": -4.0,
+            "pipe_speed_growth": 0.01,
+            "moving_amp": 20.0,
+            "moving_omega": 0.032,
         },
         {
             "gap_range": (120, 135),
             "moving_pipes": True,
             "wind": True,
-            "pipe_speed": -4.0,
+            "pipe_speed": -4.3,
+            "pipe_speed_growth": 0.012,
+            "wind_mu": 0.15,
+            "moving_amp": 22.0,
+        },
+        {
+            "gap_range": (115, 130),
+            "moving_pipes": True,
+            "wind": True,
+            "pipe_speed": -4.8,
             "pipe_speed_growth": 0.015,
             "wind_mu": 0.18,
+            "moving_amp": 24.0,
         },
         {
             "gap_range": (110, 125),
@@ -368,51 +409,71 @@ def main() -> None:
             "wind": True,
             "pipe_speed": -5.5,
             "pipe_speed_growth": 0.02,
-            "wind_mu": 0.22,
-            "moving_amp": 24.0,
+            "wind_mu": 0.21,
+            "moving_amp": 26.0,
+        },
+        {
+            "gap_range": (105, 120),
+            "moving_pipes": True,
+            "wind": True,
+            "pipe_speed": -6.2,
+            "pipe_speed_growth": 0.024,
+            "wind_mu": 0.23,
+            "moving_amp": 28.0,
+            "moving_omega": 0.045,
         },
         {
             "gap_range": (100, 115),
             "moving_pipes": True,
             "wind": True,
             "pipe_speed": -7.0,
-            "pipe_speed_growth": 0.03,
+            "pipe_speed_growth": 0.028,
             "wind_mu": 0.25,
             "moving_amp": 30.0,
             "moving_omega": 0.05,
         },
         {
-            "gap_range": (92, 108),
+            "gap_range": (96, 110),
+            "moving_pipes": True,
+            "wind": True,
+            "pipe_speed": -7.6,
+            "pipe_speed_growth": 0.032,
+            "wind_mu": 0.28,
+            "moving_amp": 33.0,
+            "moving_omega": 0.055,
+        },
+        {
+            "gap_range": (92, 106),
             "moving_pipes": True,
             "wind": True,
             "pipe_speed": -8.0,
             "pipe_speed_growth": 0.035,
-            "wind_mu": 0.28,
-            "moving_amp": 34.0,
-            "moving_omega": 0.055,
-        },
-        {
-            "gap_range": (90, 105),
-            "moving_pipes": True,
-            "wind": True,
-            "pipe_speed": -8.0,
-            "pipe_speed_growth": 0.04,
             "wind_mu": 0.3,
             "moving_amp": 35.0,
             "moving_omega": 0.06,
         },
         {
-            "gap_range": (85, 100),
+            "gap_range": (88, 102),
+            "moving_pipes": True,
+            "wind": True,
+            "pipe_speed": -8.3,
+            "pipe_speed_growth": 0.038,
+            "wind_mu": 0.32,
+            "moving_amp": 36.0,
+            "moving_omega": 0.062,
+        },
+        {
+            "gap_range": (85, 98),
             "moving_pipes": True,
             "wind": True,
             "pipe_speed": -8.5,
-            "pipe_speed_growth": 0.045,
+            "pipe_speed_growth": 0.04,
             "wind_mu": 0.33,
             "moving_amp": 38.0,
             "moving_omega": 0.065,
         },
     ]
-    thresholds = [1.2, 2.2, 3.8, 5.2, 6.8, 8.8, 11.0, 13.0, 15.0]
+    thresholds = [1.2, 2.0, 2.8, 3.6, 4.6, 5.6, 6.8, 8.0, 9.4, 10.8, 12.3, 13.8, 15.3, 17.0, 19.0]
     curriculum_cb = CurriculumCallback(
         curriculum_stages,
         thresholds,
@@ -420,7 +481,7 @@ def main() -> None:
         min_stage_steps=80_000,
         checkpoint_dir=run_dir / "curriculum",
         log_every=2000,
-        max_stage_steps=[200_000, 250_000, 320_000, 380_000, 450_000, 520_000, 620_000, 720_000, 850_000],
+        max_stage_steps=[200_000, 250_000, 320_000, 380_000, 450_000, 520_000, 600_000, 700_000, 800_000, 900_000, 1_000_000, 1_100_000, 1_200_000, 1_300_000, 1_400_000],
     )
 
     model = build_model(args, vec_env, run_dir)
