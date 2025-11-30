@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from typing import Any
 
 import gymnasium as gym
@@ -75,6 +76,8 @@ class FlappyEnv(gym.Env):
         self._steps = 0
         self._prev_dist = 0.0
         self._wind_est = 0.0
+        self._entry_speed: float | None = None
+        self._entry_transition_steps: float = 0.0
 
         self._obs_dim = self._compute_obs_dim()
         self.observation_space = spaces.Box(
@@ -113,7 +116,8 @@ class FlappyEnv(gym.Env):
             raise ValueError(f"Invalid action {action}")
         self._steps += 1
         prev_state = self._state
-        new_state = step_dynamics(prev_state, action, self._cfg, self._rng)
+        active_cfg = self._current_cfg(prev_state)
+        new_state = step_dynamics(prev_state, action, active_cfg, self._rng)
 
         pipe_cross = passed_pipe(prev_state, new_state)
         if pipe_cross:
@@ -134,7 +138,7 @@ class FlappyEnv(gym.Env):
         dist = abs(new_state["bird_y"] - new_state["gap_center_y"])
         prev_dist = self._prev_dist if self._steps > 1 else dist
         flap_used = new_state.get("last_flap", 0.0)
-        reward = self._compute_reward(dist, prev_dist, flap_used, pipe_cross, crash)
+        reward = self._compute_reward(dist, prev_dist, flap_used, pipe_cross, crash or out_of_bounds)
 
         self._state = new_state
         self._prev_dist = dist
@@ -224,6 +228,8 @@ class FlappyEnv(gym.Env):
         wind_mu: float | None = None,
         moving_amp: float | None = None,
         moving_omega: float | None = None,
+        entry_speed: float | None = None,
+        entry_transition_steps: float | None = None,
     ) -> None:
         """Update runtime difficulty parameters without recreating the env."""
         if gap_height_range is not None:
@@ -248,6 +254,30 @@ class FlappyEnv(gym.Env):
             self._cfg.moving_amp = moving_amp
         if moving_omega is not None:
             self._cfg.moving_omega = moving_omega
+        if entry_speed is not None or entry_transition_steps is not None:
+            self._set_entry_transition(entry_speed, entry_transition_steps)
+
+    def _set_entry_transition(
+        self,
+        entry_speed: float | None = None,
+        entry_transition_steps: float | None = None,
+    ) -> None:
+        if entry_speed is not None:
+            if self._pipe_speed_cap is not None:
+                entry_speed = max(entry_speed, self._pipe_speed_cap)
+            self._entry_speed = entry_speed
+        if entry_transition_steps is not None:
+            self._entry_transition_steps = max(0.0, float(entry_transition_steps))
+
+    def _current_cfg(self, state: dict[str, Any]) -> PhysicsConfig:
+        if self._entry_speed is None:
+            return self._cfg
+        if self._entry_transition_steps <= 0:
+            return replace(self._cfg, pipe_vx=self._entry_speed)
+        progress = min(1.0, state.get("t", 0) / self._entry_transition_steps)
+        smooth = progress * progress * (3.0 - 2.0 * progress)  # smoothstep easing
+        pipe_vx = self._entry_speed + smooth * (self._cfg.pipe_vx - self._entry_speed)
+        return replace(self._cfg, pipe_vx=pipe_vx)
 
     def _compute_reward(
         self,
@@ -261,7 +291,8 @@ class FlappyEnv(gym.Env):
         if self.energy:
             r_step -= 0.001 * flap_used
         r_pipe = 1.0 if pipe_cross else 0.0
-        r_crash = -1.0 if crash else 0.0
-        return float(np.clip(r_step + r_pipe + r_crash, -1.0, 1.0))
+        r_center = 0.3 if pipe_cross and dist < 20.0 else 0.0
+        r_crash = -3.0 if crash else 0.0
+        return float(np.clip(r_step + r_pipe + r_center + r_crash, -3.0, 3.0))
 
 __all__ = ["FlappyEnv"]

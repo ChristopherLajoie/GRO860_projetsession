@@ -40,6 +40,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--curriculum", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num-envs", type=int, default=8)
     parser.add_argument("--max-pipe-speed", type=float, help="Cap absolute pipe speed (e.g., 7.5)")
+    parser.add_argument("--entry-speed", type=float, help="Initial pipe speed (e.g., -4.0) before smoothing to stage speed.")
+    parser.add_argument(
+        "--entry-transition-steps",
+        type=float,
+        default=600.0,
+        help="Number of environment steps to smoothly transition from entry speed to stage speed.",
+    )
     return parser.parse_args()
 
 
@@ -63,6 +70,11 @@ def make_env(args: argparse.Namespace, seed_offset: int = 0) -> FlappyEnv:
         render_mode=None,
         seed=args.seed + seed_offset,
     )
+    if args.entry_speed is not None:
+        env.apply_settings(
+            entry_speed=args.entry_speed,
+            entry_transition_steps=args.entry_transition_steps,
+        )
     if not (args.wind or args.curriculum):
         env.apply_settings(wind=False)
     else:
@@ -167,6 +179,8 @@ class CurriculumCallback(BaseCallback):
                     wind_mu=cfg.get("wind_mu"),
                     moving_amp=cfg.get("moving_amp"),
                     moving_omega=cfg.get("moving_omega"),
+                    entry_speed=cfg.get("entry_speed"),
+                    entry_transition_steps=cfg.get("entry_transition_steps"),
                 )
         self.last_stage_step = self.model.num_timesteps if hasattr(self.model, "num_timesteps") else 0
         self._record_curriculum(cfg, force=True)
@@ -286,6 +300,7 @@ def build_model(args: argparse.Namespace, vec_env, logdir: Path):
         tensorboard_log=str(logdir),
         seed=args.seed,
         verbose=1,
+        policy_kwargs=dict(net_arch=[256, 256]),
     )
 
 
@@ -313,19 +328,23 @@ def main() -> None:
 
     vec_env = DummyVecEnv([_make(i) for i in range(args.num_envs)])
 
-    eval_env = Monitor(
-        FlappyEnv(
-            use_rays=args.use_rays,
-            n_rays=args.n_rays,
-            three_flaps=args.three_flaps,
-            wind=args.wind or args.curriculum,
-            moving_pipes=args.moving_pipes,
-            energy=args.energy,
-            gap_height_range=gap_range,
-            render_mode="human" if args.render_eval else None,
-            seed=args.seed + 42,
-        )
+    eval_base_env = FlappyEnv(
+        use_rays=args.use_rays,
+        n_rays=args.n_rays,
+        three_flaps=args.three_flaps,
+        wind=args.wind or args.curriculum,
+        moving_pipes=args.moving_pipes,
+        energy=args.energy,
+        gap_height_range=gap_range,
+        render_mode="human" if args.render_eval else None,
+        seed=args.seed + 42,
     )
+    if args.entry_speed is not None:
+        eval_base_env.apply_settings(
+            entry_speed=args.entry_speed,
+            entry_transition_steps=args.entry_transition_steps,
+        )
+    eval_env = Monitor(eval_base_env)
     eval_env.env.apply_settings(wind=args.wind)
 
     eval_callback = EvalCallback(
@@ -481,7 +500,7 @@ def main() -> None:
             ps = stage.get("pipe_speed")
             if ps is not None and ps < cap:
                 stage["pipe_speed"] = cap
-    thresholds = [1.2, 2.0, 2.8, 3.6, 4.6, 5.6, 6.8, 8.0, 9.4, 10.8, 12.3, 13.8, 15.3, 17.0, 19.0]
+    thresholds = [5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0]
     curriculum_cb = CurriculumCallback(
         curriculum_stages,
         thresholds,
@@ -527,6 +546,11 @@ def main() -> None:
         render_mode="human" if args.render_eval else None,
         seed=args.seed + 99,
     )
+    if args.entry_speed is not None:
+        final_env.apply_settings(
+            entry_speed=args.entry_speed,
+            entry_transition_steps=args.entry_transition_steps,
+        )
 
     stats = evaluate_model(model, final_env, args.eval_episodes, args.render_eval)
     print("Evaluation:", stats)

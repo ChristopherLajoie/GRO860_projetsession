@@ -30,6 +30,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gap-min", type=float)
     parser.add_argument("--gap-max", type=float)
     parser.add_argument("--max-pipe-speed", type=float)
+    parser.add_argument("--entry-speed", type=float, help="Initial pipe speed before easing to stage speed.")
+    parser.add_argument(
+        "--entry-transition-steps",
+        type=float,
+        default=600.0,
+        help="Steps to smoothly transition from entry speed to stage speed.",
+    )
     return parser.parse_args()
 
 
@@ -57,6 +64,11 @@ def main() -> None:
         render_mode=render_mode,
         seed=args.seed,
     )
+    if args.entry_speed is not None:
+        env.apply_settings(
+            entry_speed=args.entry_speed,
+            entry_transition_steps=args.entry_transition_steps,
+        )
     model = load_model(args.algo, args.model_path)
 
     lengths: List[int] = []
