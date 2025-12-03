@@ -34,12 +34,7 @@ class PhysicsConfig:
     gap_center_bounds: tuple[float, float] = (HEIGHT * 0.2, HEIGHT * 0.8)
     energy_cost: float = 0.12
     energy_regen: float = 0.01
-    wind_mu: float = 0.25
-    wind_theta: float = 0.008
-    wind_sigma: float = 0.015
-    wind_mag_clamp: float = 0.35
-    wind_dir_flip_prob: float = 0.0
-    wind_dir_min_steps: int = 9999
+    wind_mag_clamp: float = 0.3
     pipe_speed_growth: float = 0.03
     pipe_speed_cap: float | None = None
 
@@ -57,10 +52,10 @@ def init_state(rng: np.random.Generator) -> Dict[str, float]:
         "gap_height": gap_height,
         "baseline_gap": GAP_HEIGHT,
         "pipe_vx": PIPE_VX,
-        "wind": 0.0,
+        "pipe_vx": PIPE_VX,
+        "wind": rng.uniform(-0.3, 0.3),  # Placeholder, overwritten by step_dynamics if wind is enabled
         "wind_mag": 0.0,
-        "wind_dir": 1.0 if rng.random() < 0.5 else -1.0,
-        "wind_dir_steps": 0,
+        "wind_dir": 1.0,
         "energy": 1.0,
         "t": 0,
         "pipes_passed": 0,
@@ -121,30 +116,33 @@ def step_dynamics(state: dict, action: int, cfg: PhysicsConfig, rng: np.random.G
         new_state["last_flap"] = 0.0
 
     if cfg.wind:
-        wind_dir = state.get("wind_dir", 1.0)
-        dir_steps = state.get("wind_dir_steps", 0) + 1
-        if (
-            cfg.wind_dir_flip_prob > 0.0
-            and dir_steps >= cfg.wind_dir_min_steps
-            and rng.random() < cfg.wind_dir_flip_prob
-        ):
-            wind_dir = 1.0 if rng.random() < 0.5 else -1.0
-            dir_steps = 0
-        wind_mag = ou_step(
-            state.get("wind_mag", 0.0),
-            rng,
-            mu=cfg.wind_mu,
-            sigma=cfg.wind_sigma,
-            theta=cfg.wind_theta,
-            clamp_value=cfg.wind_mag_clamp,
-        )
-        wind = wind_dir * wind_mag
+        # Episode-constant wind: sampled in init_state or preserved from prev step
+        # We need to ensure it respects the current clamp if it changed (e.g. curriculum update)
+        current_wind = state.get("wind", 0.0)
+        # If this is the first step (t=0) and we just initialized, we might want to respect the clamp
+        # But init_state doesn't know the cfg. Let's just clamp it here.
+        # Actually, better approach:
+        # If t=0, we sample a new wind based on current cfg.
+        if state["t"] == 0:
+             wind = rng.uniform(-cfg.wind_mag_clamp, cfg.wind_mag_clamp)
+        else:
+             wind = current_wind
+        
+        wind_mag = abs(wind)
+        wind_dir = np.sign(wind)
     else:
         wind = 0.0
         wind_dir = state.get("wind_dir", 1.0)
         dir_steps = state.get("wind_dir_steps", 0)
         wind_mag = 0.0
-    vy += wind
+    speed_ratio = abs(state["pipe_vx"] / PIPE_VX)
+    effective_wind = wind * speed_ratio
+    
+    # Horizontal Wind: Affects the relative speed of the pipes.
+    # +Wind (Right) -> Pushes bird right -> Pipes seem to move left slower -> Add positive value to negative pipe_vx
+    # -Wind (Left) -> Pushes bird left -> Pipes seem to move left faster -> Add negative value to negative pipe_vx
+    
+    # vy += effective_wind  <-- REMOVED Vertical Wind
     vy = clamp(vy, -MAX_VY, MAX_VY)
 
     bird_y = clamp(state["bird_y"] + vy, 0.0, HEIGHT)
@@ -154,7 +152,12 @@ def step_dynamics(state: dict, action: int, cfg: PhysicsConfig, rng: np.random.G
     pipe_vx = cfg.pipe_vx * speed_multiplier
     if cfg.pipe_speed_cap is not None:
         pipe_vx = max(pipe_vx, cfg.pipe_speed_cap)
-    x_pipe = state["x_pipe"] + pipe_vx
+    
+    # Apply Horizontal Wind to Pipe Movement
+    # We need to access effective_wind here. 
+    # Since I calculated it above, I should probably move the calculation or variable scope.
+    # But wait, step_dynamics is one function. effective_wind is available.
+    x_pipe = state["x_pipe"] + pipe_vx + effective_wind
 
     if x_pipe + PIPE_W < 0.0:
         x_pipe = WIDTH + rng.uniform(40.0, 120.0)
@@ -175,7 +178,6 @@ def step_dynamics(state: dict, action: int, cfg: PhysicsConfig, rng: np.random.G
     new_state["wind"] = wind
     new_state["wind_mag"] = wind_mag
     new_state["wind_dir"] = wind_dir
-    new_state["wind_dir_steps"] = dir_steps
     new_state["x_pipe"] = x_pipe
     new_state["pipe_vx"] = pipe_vx
 

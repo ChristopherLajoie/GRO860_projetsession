@@ -16,7 +16,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Evaluate Flappy RL agents over multiple seeds")
     parser.add_argument("--seeds", type=int, nargs="+", default=[0, 1, 2, 3, 4], help="List of seeds to run")
     parser.add_argument("--model-path", required=True, help="Path to the model")
-    parser.add_argument("--algo", choices=["dqn", "ppo"], required=True, help="RL Algorithm")
+    parser.add_argument("--algo", choices=["dqn", "ppo", "pid"], required=True, help="RL Algorithm")
     
     # Capture all other arguments to pass to evaluate.py
     return parser.parse_known_args()

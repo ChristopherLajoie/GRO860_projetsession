@@ -291,7 +291,7 @@ class FlappyEnv(gym.Env):
         if self.energy:
             r_step -= 0.001 * flap_used
         r_pipe = 1.0 if pipe_cross else 0.0
-        r_center = 0.3 if pipe_cross and dist < 20.0 else 0.0
+        r_center = 0.1 if pipe_cross and dist < 20.0 else 0.0
         r_crash = -3.0 if crash else 0.0
         return float(np.clip(r_step + r_pipe + r_center + r_crash, -3.0, 3.0))
 

@@ -9,6 +9,7 @@ from typing import List
 import imageio.v2 as imageio
 import numpy as np
 from stable_baselines3 import DQN, PPO
+from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack
 
 from flappy.env import FlappyEnv
 
@@ -16,21 +17,21 @@ from flappy.env import FlappyEnv
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Evaluate Flappy RL agents")
     parser.add_argument("--model-path", required=True)
-    parser.add_argument("--algo", choices=["dqn", "ppo"], required=True)
-    parser.add_argument("--episodes", type=int, default=20)
-    parser.add_argument("--render", action="store_true")
+    parser.add_argument("--algo", choices=["dqn", "ppo", "pid"], required=True, help="RL Algorithm or 'pid'")
+    parser.add_argument("--episodes", type=int, default=10, help="Number of episodes")
+    parser.add_argument("--render", action="store_true", help="Render the environment")
     parser.add_argument("--record", help="Path to MP4/ GIF for saving rollouts")
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--wind", action="store_true")
-    parser.add_argument("--moving-pipes", action="store_true")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed")
+    parser.add_argument("--wind", action="store_true", help="Enable wind")
+    parser.add_argument("--moving-pipes", action="store_true", help="Enable moving pipes")
     parser.add_argument("--three-flaps", action="store_true")
     parser.add_argument("--use-rays", action="store_true")
     parser.add_argument("--n-rays", type=int, default=7)
     parser.add_argument("--energy", action="store_true")
     parser.add_argument("--gap-min", type=float)
     parser.add_argument("--gap-max", type=float)
-    parser.add_argument("--max-pipe-speed", type=float)
-    parser.add_argument("--entry-speed", type=float, help="Initial pipe speed before easing to stage speed.")
+    parser.add_argument("--max-pipe-speed", type=float, default=None, help="Cap pipe speed")
+    parser.add_argument("--entry-speed", type=float, default=None, help="Starting pipe speed (warm-up)")
     parser.add_argument(
         "--entry-transition-steps",
         type=float,
@@ -40,9 +41,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+from flappy.pid import PIDAgent
+
 def load_model(algo: str, path: str):
     if algo == "dqn":
         return DQN.load(path)
+    if algo == "pid":
+        return PIDAgent()
     return PPO.load(path)
 
 
@@ -69,6 +74,11 @@ def main() -> None:
             entry_speed=args.entry_speed,
             entry_transition_steps=args.entry_transition_steps,
         )
+    
+    # Wrap in VecFrameStack for model compatibility
+    env = DummyVecEnv([lambda: env])
+    env = VecFrameStack(env, n_stack=4)
+    
     model = load_model(args.algo, args.model_path)
 
     lengths: List[int] = []
@@ -76,13 +86,15 @@ def main() -> None:
     frames: List[np.ndarray] = []
 
     for ep in range(args.episodes):
-        obs, _ = env.reset()
-        done = trunc = False
+        obs = env.reset()
+        done = False
         steps = 0
         episode_frames: List[np.ndarray] = []
-        while not (done or trunc):
+        while not done:
             action, _ = model.predict(obs, deterministic=True)
-            obs, reward, done, trunc, info = env.step(action)
+            obs, reward, dones, infos = env.step(action)
+            done = dones[0]
+            info = infos[0]
             steps += 1
             if render_mode:
                 frame = env.render()

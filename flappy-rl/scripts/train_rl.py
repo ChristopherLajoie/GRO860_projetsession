@@ -12,7 +12,7 @@ import numpy as np
 from stable_baselines3 import DQN, PPO
 from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv
+from stable_baselines3.common.vec_env import DummyVecEnv, VecFrameStack, VecEnv
 from tqdm import tqdm
 
 from flappy.env import FlappyEnv
@@ -104,16 +104,26 @@ def write_config(path: Path, data: Dict[str, Any]) -> None:
     path.write_text("\n".join(lines))
 
 
-def evaluate_model(model, env: FlappyEnv, episodes: int, render: bool) -> Dict[str, float]:
+def evaluate_model(model, env, episodes: int, render: bool) -> Dict[str, float]:
+    is_vec = isinstance(env, VecEnv)
     lengths: List[int] = []
     scores: List[int] = []
     for _ in range(episodes):
-        obs, _ = env.reset()
-        done = trunc = False
+        if is_vec:
+            obs = env.reset()
+        else:
+            obs, _ = env.reset()
+        done = False
         steps = 0
-        while not (done or trunc):
+        while not done:
             action, _ = model.predict(obs, deterministic=True)
-            obs, _, done, trunc, info = env.step(action)
+            if is_vec:
+                obs, _, dones, infos = env.step(action)
+                done = dones[0]
+                info = infos[0]
+            else:
+                obs, _, term, trunc, info = env.step(action)
+                done = term or trunc
             steps += 1
             if render:
                 env.render()
@@ -327,6 +337,7 @@ def main() -> None:
         return _init
 
     vec_env = DummyVecEnv([_make(i) for i in range(args.num_envs)])
+    vec_env = VecFrameStack(vec_env, n_stack=4)
 
     eval_base_env = FlappyEnv(
         use_rays=args.use_rays,
@@ -344,8 +355,9 @@ def main() -> None:
             entry_speed=args.entry_speed,
             entry_transition_steps=args.entry_transition_steps,
         )
-    eval_env = Monitor(eval_base_env)
-    eval_env.env.apply_settings(wind=args.wind)
+    eval_base_env.apply_settings(wind=args.wind)
+    eval_env = DummyVecEnv([lambda: Monitor(eval_base_env)])
+    eval_env = VecFrameStack(eval_env, n_stack=4)
 
     eval_callback = EvalCallback(
         eval_env,
@@ -364,6 +376,8 @@ def main() -> None:
             "wind": False,
             "pipe_speed": -3.0,
             "pipe_speed_growth": 0.0,
+            "entry_speed": -3.0,
+            "entry_transition_steps": 0,
         },
         {
             "gap_range": (145, 160),
@@ -371,6 +385,8 @@ def main() -> None:
             "wind": False,
             "pipe_speed": -3.1,
             "pipe_speed_growth": 0.0,
+            "entry_speed": -3.0,
+            "entry_transition_steps": 100,
         },
         {
             "gap_range": (140, 155),
@@ -378,6 +394,8 @@ def main() -> None:
             "wind": False,
             "pipe_speed": -3.2,
             "pipe_speed_growth": 0.0,
+            "entry_speed": -3.0,
+            "entry_transition_steps": 200,
         },
         {
             "gap_range": (135, 150),
@@ -387,6 +405,8 @@ def main() -> None:
             "pipe_speed_growth": 0.005,
             "moving_amp": 15.0,
             "moving_omega": 0.02,
+            "entry_speed": -3.5,
+            "entry_transition_steps": 400,
         },
         {
             "gap_range": (130, 145),
@@ -396,6 +416,8 @@ def main() -> None:
             "pipe_speed_growth": 0.008,
             "moving_amp": 18.0,
             "moving_omega": 0.03,
+            "entry_speed": -3.5,
+            "entry_transition_steps": 500,
         },
         {
             "gap_range": (125, 140),
@@ -405,6 +427,18 @@ def main() -> None:
             "pipe_speed_growth": 0.01,
             "moving_amp": 20.0,
             "moving_omega": 0.032,
+            "entry_speed": -3.5,
+            "entry_transition_steps": 600,
+        },
+        {
+            "gap_range": (125, 140),
+            "moving_pipes": False,
+            "wind": True,
+            "pipe_speed": -4.0,
+            "pipe_speed_growth": 0.01,
+            "wind_mu": 0.15,
+            "entry_speed": -4.0,
+            "entry_transition_steps": 600,
         },
         {
             "gap_range": (120, 135),
@@ -414,6 +448,8 @@ def main() -> None:
             "pipe_speed_growth": 0.012,
             "wind_mu": 0.15,
             "moving_amp": 22.0,
+            "entry_speed": -4.0,
+            "entry_transition_steps": 600,
         },
         {
             "gap_range": (115, 130),
@@ -421,8 +457,10 @@ def main() -> None:
             "wind": True,
             "pipe_speed": -4.8,
             "pipe_speed_growth": 0.015,
-            "wind_mu": 0.18,
+            "wind_mag_clamp": 0.1,
             "moving_amp": 24.0,
+            "entry_speed": -4.0,
+            "entry_transition_steps": 600,
         },
         {
             "gap_range": (110, 125),
@@ -430,8 +468,10 @@ def main() -> None:
             "wind": True,
             "pipe_speed": -5.5,
             "pipe_speed_growth": 0.021,
-            "wind_mu": 0.22,
+            "wind_mag_clamp": 0.25,
             "moving_amp": 27.0,
+            "entry_speed": -4.0,
+            "entry_transition_steps": 600,
         },
         {
             "gap_range": (105, 120),
@@ -442,6 +482,8 @@ def main() -> None:
             "wind_mu": 0.23,
             "moving_amp": 28.0,
             "moving_omega": 0.04,
+            "entry_speed": -4.0,
+            "entry_transition_steps": 600,
         },
         {
             "gap_range": (100, 115),
@@ -449,9 +491,11 @@ def main() -> None:
             "wind": True,
             "pipe_speed": -7.0,
             "pipe_speed_growth": 0.024,
-            "wind_mu": 0.24,
+            "wind_mag_clamp": 0.3,
             "moving_amp": 29.0,
             "moving_omega": 0.042,
+            "entry_speed": -4.0,
+            "entry_transition_steps": 600,
         },
         {
             "gap_range": (96, 110),
@@ -459,9 +503,11 @@ def main() -> None:
             "wind": True,
             "pipe_speed": -7.6,
             "pipe_speed_growth": 0.026,
-            "wind_mu": 0.25,
+            "wind_mag_clamp": 0.32,
             "moving_amp": 30.0,
             "moving_omega": 0.045,
+            "entry_speed": -4.0,
+            "entry_transition_steps": 600,
         },
         {
             "gap_range": (92, 106),
@@ -469,9 +515,11 @@ def main() -> None:
             "wind": True,
             "pipe_speed": -8.0,
             "pipe_speed_growth": 0.028,
-            "wind_mu": 0.26,
+            "wind_mag_clamp": 0.33,
             "moving_amp": 31.0,
             "moving_omega": 0.048,
+            "entry_speed": -4.0,
+            "entry_transition_steps": 600,
         },
         {
             "gap_range": (88, 102),
@@ -479,9 +527,11 @@ def main() -> None:
             "wind": True,
             "pipe_speed": -8.3,
             "pipe_speed_growth": 0.029,
-            "wind_mu": 0.265,
+            "wind_mag_clamp": 0.34,
             "moving_amp": 31.5,
             "moving_omega": 0.05,
+            "entry_speed": -4.0,
+            "entry_transition_steps": 600,
         },
         {
             "gap_range": (85, 98),
@@ -489,9 +539,11 @@ def main() -> None:
             "wind": True,
             "pipe_speed": -8.5,
             "pipe_speed_growth": 0.03,
-            "wind_mu": 0.27,
+            "wind_mag_clamp": 0.35,
             "moving_amp": 32.0,
             "moving_omega": 0.052,
+            "entry_speed": -4.0,
+            "entry_transition_steps": 600,
         },
     ]
     if args.max_pipe_speed is not None:
@@ -500,7 +552,7 @@ def main() -> None:
             ps = stage.get("pipe_speed")
             if ps is not None and ps < cap:
                 stage["pipe_speed"] = cap
-    thresholds = [5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0]
+    thresholds = [5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0]
     curriculum_cb = CurriculumCallback(
         curriculum_stages,
         thresholds,
@@ -508,7 +560,7 @@ def main() -> None:
         min_stage_steps=80_000,
         checkpoint_dir=run_dir / "curriculum",
         log_every=2000,
-        max_stage_steps=[200_000, 250_000, 320_000, 380_000, 450_000, 520_000, 600_000, 700_000, 800_000, 900_000, 1_000_000, 1_100_000, 1_200_000, 1_300_000, 1_400_000],
+        max_stage_steps=[200_000, 250_000, 320_000, 380_000, 450_000, 520_000, 600_000, 650_000, 700_000, 800_000, 900_000, 1_000_000, 1_100_000, 1_200_000, 1_300_000, 1_400_000],
     )
 
     model = build_model(args, vec_env, run_dir)
@@ -551,6 +603,8 @@ def main() -> None:
             entry_speed=args.entry_speed,
             entry_transition_steps=args.entry_transition_steps,
         )
+    final_env = DummyVecEnv([lambda: final_env])
+    final_env = VecFrameStack(final_env, n_stack=4)
 
     stats = evaluate_model(model, final_env, args.eval_episodes, args.render_eval)
     print("Evaluation:", stats)
