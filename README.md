@@ -1,6 +1,6 @@
 # Flappy RL
 
-A Flappy Bird–style Gymnasium environment with optional complexity toggles (wind, moving pipes, ray sensors, energy budget) plus Stable-Baselines3 training scripts.
+A Flappy Bird–style Gymnasium environment with optional complexity plus Stable-Baselines3 training scripts.
 
 ## Installation
 
@@ -13,65 +13,41 @@ pip install tensorboard pytest
 ## Quick commands
 
 ```bash
-# train (baseline DQN)
-python scripts/train_dqn.py --seed 0 --total-steps 300000
+# train
+python scripts/train_rl.py --algo ppo --total-steps 300000
 
-# train with complexity
-python scripts/train_dqn.py --seed 1 --total-steps 400000 --three-flaps --wind --moving-pipes
+# train with curriculum
+python scripts/train_rl.py --algo ppo --total-steps 1000000 --curriculum
 
 # evaluate
-python scripts/evaluate.py --algo dqn --model-path runs/dqn/best_model.zip --episodes 50 --render
+python scripts/evaluate.py --algo ppo --model-path runs/PPO_23/PPO_23_latest.zip --episodes 50
+
+# evaluate and render
+python scripts/evaluate.py --algo ppo --model-path runs/PPO_23/PPO_23_latest.zip --episodes 50 --render
+
+# benchmark (PPO vs PID)
+python scripts/evaluate_multiple_seeds.py --algo ppo --model-path runs/PPO_23/PPO_23_latest.zip
+python scripts/evaluate_multiple_seeds.py --algo pid --model-path none
 
 # tests
-pytest -q
-
-# tensorboard
-tensorboard --logdir runs
+pytest
 ```
 
 ## Usage highlights
 
-- Toggle features with flags: `--wind`, `--moving-pipes`, `--three-flaps`, `--use-rays`, `--energy`.
-- Clamp gaps with `--gap-min/--gap-max` to study generalisation (training scripts and evaluator).
-- Enable/disable the built-in curriculum via `--curriculum` / `--no-curriculum` on `train_dqn.py`.
-- TensorBoard logs, SB3 checkpoints, and `runs/config.yaml` capture seeds, flags, and git revision for reproducibility.
+- **Unified Trainer**: Use `scripts/train_rl.py` for training.
+- **Features**: Toggle features with flags: `--wind`, `--moving-pipes`, `--three-flaps`, `--use-rays`, `--energy`.
+- **Curriculum**: Enable/disable the built-in curriculum via `--curriculum` / `--no-curriculum`.
 
-## Experiments
+## Evaluation & Analysis
 
-Run each experiment for ≥300k steps (adjust seeds as needed). Track **mean/median pipes passed**, **mean survival steps**, TensorBoard learning curves, and generalisation performance (train on `--gap-min 100 --gap-max 130`, then evaluate on `[85,95]` and `[135,150]`).
-
-1. **Baseline DQN (static pipes, no wind)**
-   ```bash
-   python scripts/train_dqn.py --seed 0 --total-steps 300000 --no-curriculum --gap-min 130 --gap-max 140
-   ```
-2. **+Three flaps**
-   ```bash
-   python scripts/train_dqn.py --seed 1 --total-steps 350000 --three-flaps --no-curriculum --gap-min 130 --gap-max 140
-   ```
-3. **+Wind**
-   ```bash
-   python scripts/train_dqn.py --seed 2 --total-steps 350000 --wind --no-curriculum --gap-min 130 --gap-max 140
-   ```
-4. **+Moving pipes**
-   ```bash
-   python scripts/train_dqn.py --seed 3 --total-steps 400000 --wind --moving-pipes --gap-min 115 --gap-max 130
-   ```
-5. **Rays vs gap-info**
-   ```bash
-   # gap-based obs (reference)
-   python scripts/train_dqn.py --seed 4 --total-steps 300000 --no-curriculum --gap-min 120 --gap-max 135
-   # ray sensors
-   python scripts/train_dqn.py --seed 4 --total-steps 300000 --use-rays --n-rays 7 --no-curriculum --gap-min 120 --gap-max 135
-   ```
-6. **PPO variant**
-   ```bash
-   python scripts/train_ppo.py --seed 5 --total-steps 400000 --wind --moving-pipes --three-flaps
-   ```
-
-### Evaluation & video
-
+**Visualize Policy (Heatmap):**
 ```bash
-python scripts/evaluate.py --algo dqn --model-path runs/dqn/best_model.zip --episodes 50 --render --record runs/eval.mp4
+python policy/plot_policy.py --model-path runs/PPO_23/PPO_23_latest.zip  --output policy.png --wind-value 0.0
 ```
 
-Report success rate (pipes ≥ threshold), mean/median pipes, mean episode length, and supply qualitative rollouts when recording via `--record`.
+**PID Tuning:**
+Scripts for tuning the PID controller are located in `scripts/pid/`.
+```bash
+python scripts/pid/tune_pid.py
+```
