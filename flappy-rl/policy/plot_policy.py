@@ -24,7 +24,7 @@ def get_obs(bird_y, bird_vy, dx, gap_center_y, gap_height, pipe_vx, wind):
     return np.array(features, dtype=np.float32)
 
 
-def plot_policy(model_path, output_file, wind_value=0.0):
+def plot_policy(model_path, output_file, wind_value=0.0, gap_center=None):
     print(f"Loading model from {model_path}...")
     model = PPO.load(model_path)
 
@@ -37,14 +37,14 @@ def plot_policy(model_path, output_file, wind_value=0.0):
 
     # Fixed parameters
     dx = 100.0  # Approaching pipe
-    gap_center_y = HEIGHT / 2
-    gap_height = GAP_HEIGHTß
+    gap_center_y = gap_center if gap_center is not None else HEIGHT / 2
+    gap_height = GAP_HEIGHT
     pipe_vx = -8.0  # Standard speed
     wind = wind_value
 
     probs = np.zeros((n_vy, n_y))
 
-    print("Generating heatmap...")
+    print(f"Generating heatmap (Wind={wind}, Gap={gap_center_y})...")
     for i, vy in enumerate(vys):
         for j, y in enumerate(ys):
             obs_frame = get_obs(y, vy, dx, gap_center_y,
@@ -73,7 +73,7 @@ def plot_policy(model_path, output_file, wind_value=0.0):
     plt.xlabel('Bird Y Position (0=Top, 600=Bottom)')
     plt.ylabel('Vertical Velocity (-12=Up, +12=Down)')
     plt.title(
-        f'PPO Policy: Flap Probability Heatmap\n(Pipe Distance=100, Wind={wind})')
+        f'PPO Policy: Flap Probability Heatmap\n(Pipe Dist=100, Wind={wind}, Gap={gap_center_y})')
 
     plt.axvline(x=gap_center_y, color='green',
                 linestyle='--', label='Gap Center')
@@ -89,6 +89,8 @@ if __name__ == "__main__":
     parser.add_argument("--output", default="policy_heatmap.png")
     parser.add_argument("--wind-value", type=float,
                         default=0.0, help="Wind value to visualize")
+    parser.add_argument("--gap-center", type=float,
+                        default=None, help="Vertical position of the gap center (default: Middle=300)")
     args = parser.parse_args()
 
-    plot_policy(args.model_path, args.output, args.wind_value)
+    plot_policy(args.model_path, args.output, args.wind_value, args.gap_center)
