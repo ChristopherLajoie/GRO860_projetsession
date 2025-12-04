@@ -36,7 +36,7 @@ pytest
 ## Usage highlights
 
 - **Unified Trainer**: Use `scripts/train_rl.py` for training.
-- **Features**: Toggle features with flags: `--wind`, `--moving-pipes`, `--three-flaps`, `--use-rays`, `--energy`.
+- **Features**: Toggle features with flags: `--wind`, `--moving-pipes`, `--three-flaps`.
 - **Curriculum**: Enable/disable the built-in curriculum via `--curriculum` / `--no-curriculum`.
 
 ## Evaluation & Analysis
