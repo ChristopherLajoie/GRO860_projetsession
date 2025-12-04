@@ -1,5 +1,3 @@
-"""Unified RL trainer for Flappy (DQN or PPO)."""
-
 from __future__ import annotations
 
 import argparse
@@ -22,30 +20,29 @@ ALGOS = {"dqn": DQN, "ppo": PPO}
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train DQN or PPO on Flappy RL")
+    parser = argparse.ArgumentParser(
+        description="Train DQN or PPO on Flappy RL")
     parser.add_argument("--algo", choices=ALGOS.keys(), required=True)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--total-steps", type=int, default=300_000)
-    parser.add_argument("--render-eval", action="store_true")
+    parser.add_argument("--steps", type=int, default=300_000)
+    parser.add_argument("--render", action="store_true")
     parser.add_argument("--wind", action="store_true")
     parser.add_argument("--moving-pipes", action="store_true")
-    parser.add_argument("--three-flaps", action="store_true")
-    parser.add_argument("--use-rays", action="store_true")
-    parser.add_argument("--n-rays", type=int, default=7)
-    parser.add_argument("--energy", action="store_true")
     parser.add_argument("--gap-min", type=float)
     parser.add_argument("--gap-max", type=float)
     parser.add_argument("--logdir", default="runs/unified")
-    parser.add_argument("--eval-episodes", type=int, default=10)
-    parser.add_argument("--curriculum", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--episodes", type=int, default=10)
+    parser.add_argument(
+        "--curriculum", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--num-envs", type=int, default=8)
-    parser.add_argument("--max-pipe-speed", type=float, help="Cap absolute pipe speed (e.g., 7.5)")
-    parser.add_argument("--entry-speed", type=float, help="Initial pipe speed (e.g., -4.0) before smoothing to stage speed.")
+    parser.add_argument("--max-pipe-speed", type=float,
+                        help="Cap absolute pipe speed (e.g., 7.5)")
+    parser.add_argument("--entry-speed", type=float,
+                        help="Initial pipe speed (e.g., -4.0) before smoothing to stage speed.")
     parser.add_argument(
         "--entry-transition-steps",
         type=float,
-        default=600.0,
-        help="Number of environment steps to smoothly transition from entry speed to stage speed.",
+        help="Steps to transition from entry_speed to target pipe_speed (e.g. 50000).",
     )
     return parser.parse_args()
 
@@ -94,7 +91,8 @@ def write_config(path: Path, data: Dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     git_hash = "unknown"
     try:
-        git_hash = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
+        git_hash = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], text=True).strip()
     except Exception:
         pass
     data = {**data, "git": git_hash}
@@ -192,7 +190,8 @@ class CurriculumCallback(BaseCallback):
                     entry_speed=cfg.get("entry_speed"),
                     entry_transition_steps=cfg.get("entry_transition_steps"),
                 )
-        self.last_stage_step = self.model.num_timesteps if hasattr(self.model, "num_timesteps") else 0
+        self.last_stage_step = self.model.num_timesteps if hasattr(
+            self.model, "num_timesteps") else 0
         self._record_curriculum(cfg, force=True)
         if not initial:
             print(f"[Curriculum] Stage {self.stage_idx} -> {cfg}")
@@ -238,13 +237,19 @@ class CurriculumCallback(BaseCallback):
 
     def _record_curriculum(self, cfg: Dict[str, Any], force: bool = False) -> None:
         self._last_log_step = self.model.num_timesteps
-        self.model.logger.record("curriculum/stage", float(self.stage_idx), exclude="stdout")
-        self.model.logger.record("curriculum/gap_min", cfg["gap_range"][0], exclude="stdout")
-        self.model.logger.record("curriculum/gap_max", cfg["gap_range"][1], exclude="stdout")
-        self.model.logger.record("curriculum/moving_pipes", float(cfg["moving_pipes"]), exclude="stdout")
-        self.model.logger.record("curriculum/wind", float(cfg["wind"]), exclude="stdout")
+        self.model.logger.record(
+            "curriculum/stage", float(self.stage_idx), exclude="stdout")
+        self.model.logger.record("curriculum/gap_min",
+                                 cfg["gap_range"][0], exclude="stdout")
+        self.model.logger.record("curriculum/gap_max",
+                                 cfg["gap_range"][1], exclude="stdout")
+        self.model.logger.record(
+            "curriculum/moving_pipes", float(cfg["moving_pipes"]), exclude="stdout")
+        self.model.logger.record(
+            "curriculum/wind", float(cfg["wind"]), exclude="stdout")
         if cfg.get("pipe_speed") is not None:
-            self.model.logger.record("curriculum/pipe_speed", float(cfg["pipe_speed"]), exclude="stdout")
+            self.model.logger.record(
+                "curriculum/pipe_speed", float(cfg["pipe_speed"]), exclude="stdout")
         if cfg.get("pipe_speed_growth") is not None:
             self.model.logger.record(
                 "curriculum/pipe_speed_growth",
@@ -257,13 +262,14 @@ class CurriculumCallback(BaseCallback):
 class ProgressCallback(BaseCallback):
     def __init__(self, total_timesteps: int) -> None:
         super().__init__()
-        self.total_timesteps = total_timesteps
+        self.total_timesteps = args.stepsimesteps
         self._pbar: Optional[tqdm] = None
         self._last_update = 0
 
     def _on_training_start(self) -> None:
         if self._pbar is None:
-            self._pbar = tqdm(total=self.total_timesteps, desc="Training", dynamic_ncols=True)
+            self._pbar = tqdm(total=self.total_timesteps,
+                              desc="Training", dynamic_ncols=True)
 
     def _on_step(self) -> bool:
         if self._pbar is not None:
@@ -552,7 +558,8 @@ def main() -> None:
             ps = stage.get("pipe_speed")
             if ps is not None and ps < cap:
                 stage["pipe_speed"] = cap
-    thresholds = [5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0, 40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0]
+    thresholds = [5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 35.0,
+                  40.0, 45.0, 50.0, 55.0, 60.0, 65.0, 70.0, 75.0, 80.0]
     curriculum_cb = CurriculumCallback(
         curriculum_stages,
         thresholds,
@@ -560,7 +567,8 @@ def main() -> None:
         min_stage_steps=80_000,
         checkpoint_dir=run_dir / "curriculum",
         log_every=2000,
-        max_stage_steps=[200_000, 250_000, 320_000, 380_000, 450_000, 520_000, 600_000, 650_000, 700_000, 800_000, 900_000, 1_000_000, 1_100_000, 1_200_000, 1_300_000, 1_400_000],
+        max_stage_steps=[200_000, 250_000, 320_000, 380_000, 450_000, 520_000, 600_000, 650_000,
+                         700_000, 800_000, 900_000, 1_000_000, 1_100_000, 1_200_000, 1_300_000, 1_400_000],
     )
 
     model = build_model(args, vec_env, run_dir)
@@ -570,21 +578,18 @@ def main() -> None:
         {
             "algo": args.algo.upper(),
             "seed": args.seed,
-            "total_steps": args.total_steps,
+            "steps": args.steps,
             "wind": args.wind,
             "moving_pipes": args.moving_pipes,
-            "three_flaps": args.three_flaps,
-            "use_rays": args.use_rays,
-            "energy": args.energy,
             "curriculum": args.curriculum,
             "gap_range": gap_range,
             "run_name": f"{prefix}_{run_idx}",
         },
     )
 
-    progress_cb = ProgressCallback(args.total_steps)
+    progress_cb = ProgressCallback(args.steps)
     callbacks = [eval_callback, curriculum_cb, progress_cb]
-    model.learn(total_timesteps=args.total_steps, callback=callbacks)
+    model.learn(total_timesteps=args.steps, callback=callbacks)
 
     final_env = FlappyEnv(
         use_rays=args.use_rays,
@@ -606,7 +611,8 @@ def main() -> None:
     final_env = DummyVecEnv([lambda: final_env])
     final_env = VecFrameStack(final_env, n_stack=4)
 
-    stats = evaluate_model(model, final_env, args.eval_episodes, args.render_eval)
+    stats = evaluate_model(
+        model, final_env, args.episodes, args.render)
     print("Evaluation:", stats)
     per_run_path = run_dir / f"{prefix}_{run_idx}_latest.zip"
     model.save(per_run_path)

@@ -1,5 +1,3 @@
-"""Physics helpers for the Flappy RL environment."""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -23,17 +21,13 @@ BIRD_SIZE = 24
 
 @dataclass
 class PhysicsConfig:
-    three_flaps: bool = False
     wind: bool = False
     moving_pipes: bool = False
-    energy: bool = False
     moving_amp: float = 35.0
     moving_omega: float = 0.05
     pipe_vx: float = PIPE_VX
     gap_height_range: tuple[float, float] = (GAP_HEIGHT - 15, GAP_HEIGHT + 15)
     gap_center_bounds: tuple[float, float] = (HEIGHT * 0.2, HEIGHT * 0.8)
-    energy_cost: float = 0.12
-    energy_regen: float = 0.01
     wind_mag_clamp: float = 0.3
     pipe_speed_growth: float = 0.03
     pipe_speed_cap: float | None = None
@@ -53,10 +47,9 @@ def init_state(rng: np.random.Generator) -> Dict[str, float]:
         "baseline_gap": GAP_HEIGHT,
         "pipe_vx": PIPE_VX,
         "pipe_vx": PIPE_VX,
-        "wind": rng.uniform(-0.3, 0.3),  # Placeholder, overwritten by step_dynamics if wind is enabled
+        "wind": rng.uniform(-0.3, 0.3),
         "wind_mag": 0.0,
         "wind_dir": 1.0,
-        "energy": 1.0,
         "t": 0,
         "pipes_passed": 0,
         "last_flap": 0.0,
@@ -76,12 +69,6 @@ def _sample_gap_center(cfg: PhysicsConfig, rng: np.random.Generator) -> float:
 
 
 def _flap_impulse(action: int, state: dict, cfg: PhysicsConfig) -> tuple[float, float]:
-    if cfg.three_flaps:
-        if action == 2:
-            return 9.0, 1.0
-        if action == 1:
-            return 6.0, 0.6
-        return 0.0, 0.0
     if action == 1:
         return FLAP_IMPULSE, 1.0
     return 0.0, 0.0
@@ -91,7 +78,8 @@ def update_moving_gap(state: dict, cfg: PhysicsConfig) -> None:
     base = state.get("gap_base_y", state["gap_center_y"])
     t = state.get("t", 0)
     offset = cfg.moving_amp * np.sin(cfg.moving_omega * t)
-    new_center = clamp(base + offset, cfg.gap_center_bounds[0], cfg.gap_center_bounds[1])
+    new_center = clamp(
+        base + offset, cfg.gap_center_bounds[0], cfg.gap_center_bounds[1])
     state["gap_center_y"] = new_center
 
 
@@ -104,30 +92,17 @@ def step_dynamics(state: dict, action: int, cfg: PhysicsConfig, rng: np.random.G
     vy = state["bird_vy"] + G
 
     if impulse > 0.0:
-        if cfg.energy:
-            energy = clamp(state.get("energy", 1.0) - cfg.energy_cost * flap_used, 0.0, 1.0)
-            new_state["energy"] = clamp(energy + cfg.energy_regen, 0.0, 1.0)
-            impulse *= 0.5 + 0.5 * new_state["energy"]
         vy -= impulse
         new_state["last_flap"] = flap_used
     else:
-        if cfg.energy:
-            new_state["energy"] = clamp(state.get("energy", 1.0) + cfg.energy_regen, 0.0, 1.0)
         new_state["last_flap"] = 0.0
 
     if cfg.wind:
-        # Episode-constant wind: sampled in init_state or preserved from prev step
-        # We need to ensure it respects the current clamp if it changed (e.g. curriculum update)
-        current_wind = state.get("wind", 0.0)
-        # If this is the first step (t=0) and we just initialized, we might want to respect the clamp
-        # But init_state doesn't know the cfg. Let's just clamp it here.
-        # Actually, better approach:
-        # If t=0, we sample a new wind based on current cfg.
         if state["t"] == 0:
-             wind = rng.uniform(-cfg.wind_mag_clamp, cfg.wind_mag_clamp)
+            wind = rng.uniform(-cfg.wind_mag_clamp, cfg.wind_mag_clamp)
         else:
-             wind = current_wind
-        
+            wind = current_wind
+
         wind_mag = abs(wind)
         wind_dir = np.sign(wind)
     else:
@@ -137,12 +112,7 @@ def step_dynamics(state: dict, action: int, cfg: PhysicsConfig, rng: np.random.G
         wind_mag = 0.0
     speed_ratio = abs(state["pipe_vx"] / PIPE_VX)
     effective_wind = wind * speed_ratio
-    
-    # Horizontal Wind: Affects the relative speed of the pipes.
-    # +Wind (Right) -> Pushes bird right -> Pipes seem to move left slower -> Add positive value to negative pipe_vx
-    # -Wind (Left) -> Pushes bird left -> Pipes seem to move left faster -> Add negative value to negative pipe_vx
-    
-    # vy += effective_wind  <-- REMOVED Vertical Wind
+
     vy = clamp(vy, -MAX_VY, MAX_VY)
 
     bird_y = clamp(state["bird_y"] + vy, 0.0, HEIGHT)
@@ -152,11 +122,7 @@ def step_dynamics(state: dict, action: int, cfg: PhysicsConfig, rng: np.random.G
     pipe_vx = cfg.pipe_vx * speed_multiplier
     if cfg.pipe_speed_cap is not None:
         pipe_vx = max(pipe_vx, cfg.pipe_speed_cap)
-    
-    # Apply Horizontal Wind to Pipe Movement
-    # We need to access effective_wind here. 
-    # Since I calculated it above, I should probably move the calculation or variable scope.
-    # But wait, step_dynamics is one function. effective_wind is available.
+
     x_pipe = state["x_pipe"] + pipe_vx + effective_wind
 
     if x_pipe + PIPE_W < 0.0:
@@ -184,7 +150,8 @@ def step_dynamics(state: dict, action: int, cfg: PhysicsConfig, rng: np.random.G
     target_angle = clamp(-vy / MAX_VY, -1.0, 1.0) * 45.0
     prev_angle = state.get("bird_angle", 0.0)
     smoothing = 0.2
-    new_state["bird_angle"] = (1 - smoothing) * prev_angle + smoothing * target_angle
+    new_state["bird_angle"] = (1 - smoothing) * \
+        prev_angle + smoothing * target_angle
 
     wing_phase = max(0.0, state.get("wing_phase", 0.0) - 0.05)
     if flap_used > 0.0:

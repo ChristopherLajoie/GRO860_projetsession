@@ -1,5 +1,3 @@
-"""Pygame-based renderer for the Flappy RL environment."""
-
 from __future__ import annotations
 
 from typing import Optional, Tuple
@@ -111,7 +109,8 @@ class Renderer:
         center = body_rect.center
 
         pygame.draw.ellipse(body, (255, 225, 80), body_rect.inflate(-6, -2))
-        pygame.draw.ellipse(body, (255, 255, 255, 200), body_rect.inflate(-10, -8))
+        pygame.draw.ellipse(body, (255, 255, 255, 200),
+                            body_rect.inflate(-10, -8))
 
         wing_lift = int(wing_phase * 8)
         wing_points = [
@@ -139,7 +138,8 @@ class Renderer:
 
     def _draw_cloud(self, x: float, y: float) -> None:
         cloud = pygame.Surface((120, 60), pygame.SRCALPHA)
-        pygame.draw.ellipse(cloud, (255, 255, 255, 210), cloud.get_rect().inflate(-40, -20))
+        pygame.draw.ellipse(cloud, (255, 255, 255, 210),
+                            cloud.get_rect().inflate(-40, -20))
         cloud_rect = cloud.get_rect(center=(int(x), int(y)))
         self.screen.blit(cloud, cloud_rect)
 
@@ -148,18 +148,23 @@ class Renderer:
         bar_height = 12
         center_x = self.width - 150
         center_y = 30
-        bg_rect = pygame.Rect(center_x - bar_width // 2, center_y - bar_height // 2, bar_width, bar_height)
-        pygame.draw.rect(self.screen, (240, 240, 240, 180), bg_rect, border_radius=6)
+        bg_rect = pygame.Rect(center_x - bar_width // 2,
+                              center_y - bar_height // 2, bar_width, bar_height)
+        pygame.draw.rect(self.screen, (240, 240, 240, 180),
+                         bg_rect, border_radius=6)
         magnitude = max(-1.0, min(1.0, wind))
         fill_width = int((bar_width / 2) * abs(magnitude))
         if magnitude > 0:
-            fill_rect = pygame.Rect(center_x, center_y - bar_height // 2, fill_width, bar_height)
+            fill_rect = pygame.Rect(
+                center_x, center_y - bar_height // 2, fill_width, bar_height)
             color = (255, 120, 80)
         else:
-            fill_rect = pygame.Rect(center_x - fill_width, center_y - bar_height // 2, fill_width, bar_height)
+            fill_rect = pygame.Rect(
+                center_x - fill_width, center_y - bar_height // 2, fill_width, bar_height)
             color = (80, 160, 255)
         pygame.draw.rect(self.screen, color, fill_rect, border_radius=6)
-        pygame.draw.line(self.screen, (60, 60, 60), (center_x, center_y - 8), (center_x, center_y + 8), 2)
+        pygame.draw.line(self.screen, (60, 60, 60), (center_x,
+                         center_y - 8), (center_x, center_y + 8), 2)
         arrow_dir = 1 if magnitude >= 0 else -1
         arrow_length = 20 + 10 * abs(magnitude)
         start = (center_x, center_y + 20)

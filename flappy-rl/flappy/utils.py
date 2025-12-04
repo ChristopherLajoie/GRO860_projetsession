@@ -1,5 +1,3 @@
-"""Utility helpers for Flappy RL."""
-
 from __future__ import annotations
 
 from typing import Sequence
@@ -8,7 +6,6 @@ import numpy as np
 
 
 def make_rng(seed: int | np.random.Generator | None) -> np.random.Generator:
-    """Return a numpy Generator seeded from ``seed`` when provided."""
     if isinstance(seed, np.random.Generator):
         return seed
     return np.random.default_rng(seed)
@@ -22,7 +19,6 @@ def ou_step(
     theta: float = 0.05,
     clamp_value: float = 0.6,
 ) -> float:
-    """Perform one Ornstein-Uhlenbeck step for the wind process."""
     noise = rng.normal(0.0, sigma)
     delta = theta * (mu - wind) + noise
     return clamp(wind + delta, -clamp_value, clamp_value)
@@ -33,7 +29,6 @@ def line_aabb_intersection(
     p1: Sequence[float],
     rect: Sequence[float],
 ) -> tuple[bool, float]:
-    """Return (hit, distance) for segment-AABB intersection using Liang-Barsky."""
     x, y, w, h = rect
     min_corner = np.array([x, y], dtype=float)
     max_corner = np.array([x + w, y + h], dtype=float)
@@ -61,7 +56,6 @@ def line_aabb_intersection(
 
 
 def clamp(value: float, lo: float, hi: float) -> float:
-    """Clamp ``value`` to the inclusive range ``[lo, hi]``."""
     return max(lo, min(hi, value))
 
 

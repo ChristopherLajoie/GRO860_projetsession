@@ -1,3 +1,1 @@
-"""Flappy RL package."""
-
-from .env import FlappyEnv  # noqa: F401
+from .env import FlappyEnv

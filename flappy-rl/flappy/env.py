@@ -1,5 +1,3 @@
-"""Gymnasium environment for the Flappy RL project."""
-
 from __future__ import annotations
 
 import math
@@ -35,34 +33,25 @@ class FlappyEnv(gym.Env):
     def __init__(
         self,
         *,
-        use_rays: bool = False,
-        n_rays: int = 7,
-        three_flaps: bool = False,
         wind: bool = False,
         moving_pipes: bool = False,
-        energy: bool = False,
         gap_height_range: tuple[float, float] | None = None,
         pipe_speed_cap: float | None = None,
         render_mode: str | None = None,
         seed: int | None = None,
     ) -> None:
         super().__init__()
-        self.use_rays = use_rays
-        self.n_rays = max(1, n_rays)
-        self.three_flaps = three_flaps
         self.wind = wind
         self.moving_pipes = moving_pipes
-        self.energy = energy
         self._gap_height_range = gap_height_range
         self.render_mode = render_mode
         self.max_steps: int | None = None
-        self._pipe_speed_cap = None if pipe_speed_cap is None else -abs(pipe_speed_cap)
+        self._pipe_speed_cap = None if pipe_speed_cap is None else - \
+            abs(pipe_speed_cap)
 
         self._cfg = PhysicsConfig(
-            three_flaps=three_flaps,
             wind=wind,
             moving_pipes=moving_pipes,
-            energy=energy,
             pipe_vx=PIPE_VX,
             pipe_speed_cap=self._pipe_speed_cap,
         )
@@ -86,16 +75,11 @@ class FlappyEnv(gym.Env):
             shape=(self._obs_dim,),
             dtype=np.float32,
         )
-        n_actions = 3 if three_flaps else 2
-        self.action_space = spaces.Discrete(n_actions)
+        self.action_space = spaces.Discrete(2)
 
     def _compute_obs_dim(self) -> int:
-        ray_features = self.n_rays if self.use_rays else 2
-        obs_dim = 3 + ray_features + 1  # bird state + gap/rays + pipe vx
-        obs_dim += 1  # slot for wind or energy
-        if self.wind and self.energy:
-            obs_dim += 1  # extra slot to keep both
-        return obs_dim
+        # [bird_y, bird_vy, dx, gap_center, gap_height, pipe_vx, wind]
+        return 7
 
     def reset(self, *, seed: int | None = None, options: dict | None = None):
         super().reset(seed=seed)
@@ -104,7 +88,8 @@ class FlappyEnv(gym.Env):
         self._state = init_state(self._rng)
         self._state["pipes_passed"] = 0
         self._steps = 0
-        self._prev_dist = abs(self._state["bird_y"] - self._state["gap_center_y"])
+        self._prev_dist = abs(
+            self._state["bird_y"] - self._state["gap_center_y"])
         self._wind_est = 0.0
         obs = self._get_obs(self._state)
         info = {"passed": False, "dist": self._prev_dist, "pipes": 0}
@@ -138,12 +123,14 @@ class FlappyEnv(gym.Env):
         dist = abs(new_state["bird_y"] - new_state["gap_center_y"])
         prev_dist = self._prev_dist if self._steps > 1 else dist
         flap_used = new_state.get("last_flap", 0.0)
-        reward = self._compute_reward(dist, prev_dist, flap_used, pipe_cross, crash or out_of_bounds)
+        reward = self._compute_reward(
+            dist, prev_dist, flap_used, pipe_cross, crash or out_of_bounds)
 
         self._state = new_state
         self._prev_dist = dist
         obs = self._get_obs(new_state)
-        info = {"passed": pipe_cross, "dist": dist, "pipes": new_state["pipes_passed"]}
+        info = {"passed": pipe_cross, "dist": dist,
+                "pipes": new_state["pipes_passed"]}
         return obs, reward, terminated, truncated, info
 
     def _get_obs(self, state: dict) -> np.ndarray:
@@ -151,50 +138,20 @@ class FlappyEnv(gym.Env):
         bird_vy = np.clip(state["bird_vy"] / MAX_VY, -1.0, 1.0)
         dx_norm = np.clip((state["x_pipe"] - BIRD_X) / WIDTH, -1.0, 1.0)
 
-        features: list[float] = [bird_y, bird_vy, dx_norm]
-
-        if self.use_rays:
-            ray_vals = self._ray_observations(state)
-            if len(ray_vals) < self.n_rays:
-                ray_vals = ray_vals + [1.0] * (self.n_rays - len(ray_vals))
-            features.extend(ray_vals)
-        else:
-            gap_center = (state["gap_center_y"] - HEIGHT / 2) / (HEIGHT / 2)
-            gap_height = (state["gap_height"] - GAP_HEIGHT) / GAP_HEIGHT
-            features.extend([gap_center, gap_height])
+        gap_center = (state["gap_center_y"] - HEIGHT / 2) / (HEIGHT / 2)
+        gap_height = (state["gap_height"] - GAP_HEIGHT) / GAP_HEIGHT
 
         pipe_vx_norm = np.clip(state["pipe_vx"] / abs(PIPE_VX), -1.0, 1.0)
-        features.append(pipe_vx_norm)
 
         wind_slot = 0.0
         if self.wind:
-            self._wind_est = 0.9 * self._wind_est + 0.1 * state.get("wind", 0.0)
+            self._wind_est = 0.9 * self._wind_est + \
+                0.1 * state.get("wind", 0.0)
             wind_slot = np.clip(self._wind_est, -1.0, 1.0)
-        elif self.energy:
-            wind_slot = np.clip(state.get("energy", 1.0) * 2.0 - 1.0, -1.0, 1.0)
-        features.append(wind_slot)
 
-        if self.wind and self.energy:
-            features.append(np.clip(state.get("energy", 1.0) * 2.0 - 1.0, -1.0, 1.0))
-
+        features = [bird_y, bird_vy, dx_norm, gap_center,
+                    gap_height, pipe_vx_norm, wind_slot]
         return np.array(features, dtype=np.float32)
-
-    def _ray_observations(self, state: dict) -> list[float]:
-        origin = np.array([BIRD_X, state["bird_y"]], dtype=float)
-        max_d = WIDTH
-        angles = np.linspace(-math.pi / 4, math.pi / 4, self.n_rays)
-        readings: list[float] = []
-        rects = pipe_rects(state)
-        for angle in angles:
-            direction = np.array([math.cos(angle), math.sin(angle)])
-            end = origin + direction * max_d
-            best = max_d
-            for rect in rects:
-                hit, dist = line_aabb_intersection(origin, end, rect)
-                if hit and dist < best:
-                    best = dist
-            readings.append(best / max_d)
-        return readings
 
     def render(self):
         if self.render_mode != "human" or self._state is None:
@@ -267,7 +224,8 @@ class FlappyEnv(gym.Env):
                 entry_speed = max(entry_speed, self._pipe_speed_cap)
             self._entry_speed = entry_speed
         if entry_transition_steps is not None:
-            self._entry_transition_steps = max(0.0, float(entry_transition_steps))
+            self._entry_transition_steps = max(
+                0.0, float(entry_transition_steps))
 
     def _current_cfg(self, state: dict[str, Any]) -> PhysicsConfig:
         if self._entry_speed is None:
@@ -275,8 +233,10 @@ class FlappyEnv(gym.Env):
         if self._entry_transition_steps <= 0:
             return replace(self._cfg, pipe_vx=self._entry_speed)
         progress = min(1.0, state.get("t", 0) / self._entry_transition_steps)
-        smooth = progress * progress * (3.0 - 2.0 * progress)  # smoothstep easing
-        pipe_vx = self._entry_speed + smooth * (self._cfg.pipe_vx - self._entry_speed)
+        smooth = progress * progress * \
+            (3.0 - 2.0 * progress)
+        pipe_vx = self._entry_speed + smooth * \
+            (self._cfg.pipe_vx - self._entry_speed)
         return replace(self._cfg, pipe_vx=pipe_vx)
 
     def _compute_reward(
@@ -288,11 +248,10 @@ class FlappyEnv(gym.Env):
         crash: bool,
     ) -> float:
         r_step = 0.05 + 0.15 * (prev_dist - dist) - 0.002 * flap_used
-        if self.energy:
-            r_step -= 0.001 * flap_used
         r_pipe = 1.0 if pipe_cross else 0.0
         r_center = 0.1 if pipe_cross and dist < 20.0 else 0.0
         r_crash = -3.0 if crash else 0.0
         return float(np.clip(r_step + r_pipe + r_center + r_crash, -3.0, 3.0))
+
 
 __all__ = ["FlappyEnv"]
